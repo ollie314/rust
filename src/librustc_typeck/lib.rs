@@ -132,7 +132,7 @@ pub mod coherence;
 pub mod variance;
 
 pub struct TypeAndSubsts<'tcx> {
-    pub substs: Substs<'tcx>,
+    pub substs: &'tcx Substs<'tcx>,
     pub ty: Ty<'tcx>,
 }
 
@@ -231,14 +231,14 @@ fn check_main_fn_ty(ccx: &CrateCtxt,
                 _ => ()
             }
             let main_def_id = tcx.map.local_def_id(main_id);
-            let substs = tcx.mk_substs(Substs::empty());
+            let substs = Substs::empty(tcx);
             let se_ty = tcx.mk_fn_def(main_def_id, substs,
                                       tcx.mk_bare_fn(ty::BareFnTy {
                 unsafety: hir::Unsafety::Normal,
                 abi: Abi::Rust,
                 sig: ty::Binder(ty::FnSig {
                     inputs: Vec::new(),
-                    output: ty::FnConverging(tcx.mk_nil()),
+                    output: tcx.mk_nil(),
                     variadic: false
                 })
             }));
@@ -284,7 +284,7 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
             }
 
             let start_def_id = ccx.tcx.map.local_def_id(start_id);
-            let substs = tcx.mk_substs(Substs::empty());
+            let substs = Substs::empty(tcx);
             let se_ty = tcx.mk_fn_def(start_def_id, substs,
                                       tcx.mk_bare_fn(ty::BareFnTy {
                 unsafety: hir::Unsafety::Normal,
@@ -294,7 +294,7 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
                         tcx.types.isize,
                         tcx.mk_imm_ptr(tcx.mk_imm_ptr(tcx.types.u8))
                     ),
-                    output: ty::FnConverging(tcx.types.isize),
+                    output: tcx.types.isize,
                     variadic: false,
                 }),
             }));

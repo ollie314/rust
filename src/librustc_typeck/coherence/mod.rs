@@ -17,14 +17,14 @@
 
 use hir::def_id::DefId;
 use middle::lang_items::UnsizeTraitLangItem;
-use rustc::ty::subst::{self, Subst};
+use rustc::ty::subst::Subst;
 use rustc::ty::{self, TyCtxt, TypeFoldable};
 use rustc::traits::{self, Reveal};
 use rustc::ty::{ImplOrTraitItemId, ConstTraitItemId};
 use rustc::ty::{MethodTraitItemId, TypeTraitItemId, ParameterEnvironment};
 use rustc::ty::{Ty, TyBool, TyChar, TyEnum, TyError};
 use rustc::ty::{TyParam, TyRawPtr};
-use rustc::ty::{TyRef, TyStruct, TyTrait, TyTuple};
+use rustc::ty::{TyRef, TyStruct, TyTrait, TyNever, TyTuple};
 use rustc::ty::{TyStr, TyArray, TySlice, TyFloat, TyInfer, TyInt};
 use rustc::ty::{TyUint, TyClosure, TyBox, TyFnDef, TyFnPtr};
 use rustc::ty::{TyProjection, TyAnon};
@@ -75,7 +75,7 @@ impl<'a, 'gcx, 'tcx> CoherenceChecker<'a, 'gcx, 'tcx> {
             }
 
             TyTrait(ref t) => {
-                Some(t.principal_def_id())
+                Some(t.principal.def_id())
             }
 
             TyBox(_) => {
@@ -84,7 +84,7 @@ impl<'a, 'gcx, 'tcx> CoherenceChecker<'a, 'gcx, 'tcx> {
 
             TyBool | TyChar | TyInt(..) | TyUint(..) | TyFloat(..) |
             TyStr | TyArray(..) | TySlice(..) | TyFnDef(..) | TyFnPtr(_) |
-            TyTuple(..) | TyParam(..) | TyError |
+            TyTuple(..) | TyParam(..) | TyError | TyNever |
             TyRawPtr(_) | TyRef(_, _) | TyProjection(..) => {
                 None
             }
@@ -386,7 +386,7 @@ impl<'a, 'gcx, 'tcx> CoherenceChecker<'a, 'gcx, 'tcx> {
 
             let source = tcx.lookup_item_type(impl_did).ty;
             let trait_ref = self.crate_context.tcx.impl_trait_ref(impl_did).unwrap();
-            let target = *trait_ref.substs.types.get(subst::TypeSpace, 0);
+            let target = trait_ref.substs.types[1];
             debug!("check_implementations_of_coerce_unsized: {:?} -> {:?} (bound)",
                    source, target);
 
@@ -458,13 +458,25 @@ impl<'a, 'gcx, 'tcx> CoherenceChecker<'a, 'gcx, 'tcx> {
                                        being coerced, none found");
                             return;
                         } else if diff_fields.len() > 1 {
-                            span_err!(tcx.sess, span, E0375,
-                                      "the trait `CoerceUnsized` may only be implemented \
-                                       for a coercion between structures with one field \
-                                       being coerced, but {} fields need coercions: {}",
-                                       diff_fields.len(), diff_fields.iter().map(|&(i, a, b)| {
-                                            format!("{} ({} to {})", fields[i].name, a, b)
-                                       }).collect::<Vec<_>>().join(", "));
+                            let item = tcx.map.expect_item(impl_node_id);
+                            let span = if let ItemImpl(_, _, _, Some(ref t), _, _) = item.node {
+                                t.path.span
+                            } else {
+                                tcx.map.span(impl_node_id)
+                            };
+
+                            let mut err = struct_span_err!(tcx.sess, span, E0375,
+                                      "implementing the trait `CoerceUnsized` \
+                                       requires multiple coercions");
+                            err.note("`CoerceUnsized` may only be implemented for \
+                                      a coercion between structures with one field being coerced");
+                            err.note(&format!("currently, {} fields need coercions: {}",
+                                             diff_fields.len(),
+                                             diff_fields.iter().map(|&(i, a, b)| {
+                                                format!("{} ({} to {})", fields[i].name, a, b)
+                                             }).collect::<Vec<_>>().join(", ") ));
+                            err.span_label(span, &format!("requires multiple coercions"));
+                            err.emit();
                             return;
                         }
 

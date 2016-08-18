@@ -299,8 +299,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
                             let mut result = String::from("<");
                             result.push_str(&rustc::hir::print::ty_to_string(&ty));
 
-                            if let Some(def_id) = self.tcx
-                                    .trait_of_item(self.tcx.map.local_def_id(id)) {
+                            if let Some(def_id) = self.tcx.trait_id_of_impl(impl_id) {
                                 result.push_str(" as ");
                                 result.push_str(&self.tcx.item_path_str(def_id));
                             }
@@ -491,7 +490,7 @@ impl<'l, 'tcx: 'l> SaveContext<'l, 'tcx> {
             Def::Enum(def_id) |
             Def::TyAlias(def_id) |
             Def::Trait(def_id) |
-            Def::TyParam(_, _, def_id, _) => {
+            Def::TyParam(def_id) => {
                 Some(Data::TypeRefData(TypeRefData {
                     span: sub_span.unwrap(),
                     ref_id: Some(def_id),
@@ -671,7 +670,6 @@ fn make_signature(decl: &ast::FnDecl, generics: &ast::Generics) -> String {
     sig.push_str(&decl.inputs.iter().map(arg_to_string).collect::<Vec<_>>().join(", "));
     sig.push(')');
     match decl.output {
-        ast::FunctionRetTy::None(_) => sig.push_str(" -> !"),
         ast::FunctionRetTy::Default(_) => {}
         ast::FunctionRetTy::Ty(ref t) => sig.push_str(&format!(" -> {}", ty_to_string(t))),
     }

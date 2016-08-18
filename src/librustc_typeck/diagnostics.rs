@@ -1866,20 +1866,6 @@ fn bar(foo: Foo) -> u32 {
 ```
 "##,
 
-E0166: r##"
-This error means that the compiler found a return expression in a function
-marked as diverging. A function diverges if it has `!` in the place of the
-return type in its signature. For example:
-
-```compile_fail,E0166
-fn foo() -> ! { return; } // error
-```
-
-For a function that diverges, every control path in the function must never
-return, for example with a `loop` that never breaks or a call to another
-diverging function (such as `panic!()`).
-"##,
-
 E0172: r##"
 This error means that an attempt was made to specify the type of a variable with
 a combination of a concrete type and a trait. Consider the following example:
@@ -4032,7 +4018,7 @@ register_diagnostics! {
 //  E0141,
 //  E0159, // use of trait `{}` as struct constructor
 //  E0163, // merged into E0071
-    E0167,
+//  E0167,
 //  E0168,
 //  E0173, // manual implementations of unboxed closure traits are experimental
 //  E0174,
@@ -4067,7 +4053,7 @@ register_diagnostics! {
 //  E0235, // structure constructor specifies a structure of type but
 //  E0236, // no lang item for range syntax
 //  E0237, // no lang item for range syntax
-    E0238, // parenthesized parameters may only be used with a trait
+//  E0238, // parenthesized parameters may only be used with a trait
 //  E0239, // `next` method of `Iterator` trait has unexpected type
 //  E0240,
 //  E0241,

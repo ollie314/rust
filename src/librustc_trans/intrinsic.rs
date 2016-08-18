@@ -15,8 +15,7 @@ use intrinsics::{self, Intrinsic};
 use libc;
 use llvm;
 use llvm::{ValueRef, TypeKind};
-use rustc::ty::subst;
-use rustc::ty::subst::FnSpace;
+use rustc::ty::subst::Substs;
 use abi::{Abi, FnType};
 use adt;
 use base::*;
@@ -132,13 +131,13 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
 
     // For `transmute` we can just trans the input expr directly into dest
     if name == "transmute" {
-        let llret_ty = type_of::type_of(ccx, ret_ty.unwrap());
+        let llret_ty = type_of::type_of(ccx, ret_ty);
         match args {
             callee::ArgExprs(arg_exprs) => {
                 assert_eq!(arg_exprs.len(), 1);
 
-                let (in_type, out_type) = (*substs.types.get(FnSpace, 0),
-                                           *substs.types.get(FnSpace, 1));
+                let (in_type, out_type) = (substs.types[0],
+                                           substs.types[1]);
                 let llintype = type_of::type_of(ccx, in_type);
                 let llouttype = type_of::type_of(ccx, out_type);
 
@@ -315,11 +314,6 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
         return Result::new(bcx, C_nil(ccx));
     }
 
-    let ret_ty = match ret_ty {
-        ty::FnConverging(ret_ty) => ret_ty,
-        ty::FnDiverging => bug!()
-    };
-
     let llret_ty = type_of::type_of(ccx, ret_ty);
 
     // Get location to store the result. If the user does
@@ -352,12 +346,12 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             Call(bcx, llfn, &[], call_debug_location)
         }
         (_, "size_of") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             let lltp_ty = type_of::type_of(ccx, tp_ty);
             C_uint(ccx, machine::llsize_of_alloc(ccx, lltp_ty))
         }
         (_, "size_of_val") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             if !type_is_sized(tcx, tp_ty) {
                 let (llsize, _) =
                     glue::size_and_align_of_dst(&bcx.build(), tp_ty, llargs[1]);
@@ -368,11 +362,11 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             }
         }
         (_, "min_align_of") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             C_uint(ccx, type_of::align_of(ccx, tp_ty))
         }
         (_, "min_align_of_val") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             if !type_is_sized(tcx, tp_ty) {
                 let (_, llalign) =
                     glue::size_and_align_of_dst(&bcx.build(), tp_ty, llargs[1]);
@@ -382,12 +376,12 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             }
         }
         (_, "pref_align_of") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             let lltp_ty = type_of::type_of(ccx, tp_ty);
             C_uint(ccx, machine::llalign_of_pref(ccx, lltp_ty))
         }
         (_, "drop_in_place") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             let ptr = if type_is_sized(tcx, tp_ty) {
                 llargs[0]
             } else {
@@ -401,22 +395,22 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             C_nil(ccx)
         }
         (_, "type_name") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             let ty_name = token::intern_and_get_ident(&tp_ty.to_string());
             C_str_slice(ccx, ty_name)
         }
         (_, "type_id") => {
-            C_u64(ccx, ccx.tcx().type_id_hash(*substs.types.get(FnSpace, 0)))
+            C_u64(ccx, ccx.tcx().type_id_hash(substs.types[0]))
         }
         (_, "init_dropped") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             if !type_is_zero_size(ccx, tp_ty) {
                 drop_done_fill_mem(bcx, llresult, tp_ty);
             }
             C_nil(ccx)
         }
         (_, "init") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             if !type_is_zero_size(ccx, tp_ty) {
                 // Just zero out the stack slot. (See comment on base::memzero for explanation)
                 init_zero_mem(bcx, llresult, tp_ty);
@@ -428,7 +422,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             C_nil(ccx)
         }
         (_, "needs_drop") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
 
             C_bool(ccx, bcx.fcx.type_needs_drop(tp_ty))
         }
@@ -447,7 +441,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             copy_intrinsic(bcx,
                            false,
                            false,
-                           *substs.types.get(FnSpace, 0),
+                           substs.types[0],
                            llargs[1],
                            llargs[0],
                            llargs[2],
@@ -457,7 +451,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             copy_intrinsic(bcx,
                            true,
                            false,
-                           *substs.types.get(FnSpace, 0),
+                           substs.types[0],
                            llargs[1],
                            llargs[0],
                            llargs[2],
@@ -466,7 +460,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
         (_, "write_bytes") => {
             memset_intrinsic(bcx,
                              false,
-                             *substs.types.get(FnSpace, 0),
+                             substs.types[0],
                              llargs[0],
                              llargs[1],
                              llargs[2],
@@ -477,7 +471,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             copy_intrinsic(bcx,
                            false,
                            true,
-                           *substs.types.get(FnSpace, 0),
+                           substs.types[0],
                            llargs[0],
                            llargs[1],
                            llargs[2],
@@ -487,7 +481,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             copy_intrinsic(bcx,
                            true,
                            true,
-                           *substs.types.get(FnSpace, 0),
+                           substs.types[0],
                            llargs[0],
                            llargs[1],
                            llargs[2],
@@ -496,14 +490,14 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
         (_, "volatile_set_memory") => {
             memset_intrinsic(bcx,
                              true,
-                             *substs.types.get(FnSpace, 0),
+                             substs.types[0],
                              llargs[0],
                              llargs[1],
                              llargs[2],
                              call_debug_location)
         }
         (_, "volatile_load") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             let mut ptr = llargs[0];
             if let Some(ty) = fn_ty.ret.cast {
                 ptr = PointerCast(bcx, ptr, ty.ptr_to());
@@ -515,7 +509,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
             to_immediate(bcx, load, tp_ty)
         },
         (_, "volatile_store") => {
-            let tp_ty = *substs.types.get(FnSpace, 0);
+            let tp_ty = substs.types[0];
             if type_is_fat_ptr(bcx.tcx(), tp_ty) {
                 VolatileStore(bcx, llargs[1], expr::get_dataptr(bcx, llargs[0]));
                 VolatileStore(bcx, llargs[2], expr::get_meta(bcx, llargs[0]));
@@ -615,10 +609,10 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
         },
 
         (_, "discriminant_value") => {
-            let val_ty = substs.types.get(FnSpace, 0);
+            let val_ty = substs.types[0];
             match val_ty.sty {
                 ty::TyEnum(..) => {
-                    let repr = adt::represent_type(ccx, *val_ty);
+                    let repr = adt::represent_type(ccx, val_ty);
                     adt::trans_get_discr(bcx, &repr, llargs[0],
                                          Some(llret_ty), true)
                 }
@@ -669,7 +663,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
 
             match split[1] {
                 "cxchg" | "cxchgweak" => {
-                    let sty = &substs.types.get(FnSpace, 0).sty;
+                    let sty = &substs.types[0].sty;
                     if int_type_width_signed(sty, ccx).is_some() {
                         let weak = if split[1] == "cxchgweak" { llvm::True } else { llvm::False };
                         let val = AtomicCmpXchg(bcx, llargs[0], llargs[1], llargs[2],
@@ -688,7 +682,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
                 }
 
                 "load" => {
-                    let sty = &substs.types.get(FnSpace, 0).sty;
+                    let sty = &substs.types[0].sty;
                     if int_type_width_signed(sty, ccx).is_some() {
                         AtomicLoad(bcx, llargs[0], order)
                     } else {
@@ -701,7 +695,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
                 }
 
                 "store" => {
-                    let sty = &substs.types.get(FnSpace, 0).sty;
+                    let sty = &substs.types[0].sty;
                     if int_type_width_signed(sty, ccx).is_some() {
                         AtomicStore(bcx, llargs[1], llargs[0], order);
                     } else {
@@ -740,7 +734,7 @@ pub fn trans_intrinsic_call<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
                         _ => ccx.sess().fatal("unknown atomic operation")
                     };
 
-                    let sty = &substs.types.get(FnSpace, 0).sty;
+                    let sty = &substs.types[0].sty;
                     if int_type_width_signed(sty, ccx).is_some() {
                         AtomicRMW(bcx, atom_op, llargs[0], llargs[1], order)
                     } else {
@@ -1226,7 +1220,7 @@ fn trans_gnu_try<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
 fn gen_fn<'a, 'tcx>(fcx: &FunctionContext<'a, 'tcx>,
                     name: &str,
                     inputs: Vec<Ty<'tcx>>,
-                    output: ty::FnOutput<'tcx>,
+                    output: Ty<'tcx>,
                     trans: &mut for<'b> FnMut(Block<'b, 'tcx>))
                     -> ValueRef {
     let ccx = fcx.ccx;
@@ -1272,11 +1266,11 @@ fn get_rust_try_fn<'a, 'tcx>(fcx: &FunctionContext<'a, 'tcx>,
         abi: Abi::Rust,
         sig: ty::Binder(ty::FnSig {
             inputs: vec![i8p],
-            output: ty::FnOutput::FnConverging(tcx.mk_nil()),
+            output: tcx.mk_nil(),
             variadic: false,
         }),
     }));
-    let output = ty::FnOutput::FnConverging(tcx.types.i32);
+    let output = tcx.types.i32;
     let rust_try = gen_fn(fcx, "__rust_try", vec![fn_ty, i8p, i8p], output, trans);
     ccx.rust_try_fn().set(Some(rust_try));
     return rust_try
@@ -1289,7 +1283,7 @@ fn span_invalid_monomorphization_error(a: &Session, b: Span, c: &str) {
 fn generic_simd_intrinsic<'blk, 'tcx, 'a>
     (bcx: Block<'blk, 'tcx>,
      name: &str,
-     substs: &'tcx subst::Substs<'tcx>,
+     substs: &'tcx Substs<'tcx>,
      callee_ty: Ty<'tcx>,
      args: Option<&[P<hir::Expr>]>,
      llargs: &[ValueRef],

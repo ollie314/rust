@@ -277,7 +277,10 @@ impl<'a, 'tcx> Qualifier<'a, 'tcx, 'tcx> {
             } else {
                 "cannot refer to statics by value, use a constant instead"
             };
-            span_err!(self.tcx.sess, self.span, E0394, "{}", msg);
+            struct_span_err!(self.tcx.sess, self.span, E0394, "{}", msg)
+                .span_label(self.span, &format!("referring to another static by value"))
+                .note(&format!("use the address-of operator or a constant instead"))
+                .emit();
 
             // Replace STATIC with NOT_CONST to avoid further errors.
             self.qualif = self.qualif - Qualif::STATIC;
@@ -416,7 +419,7 @@ impl<'a, 'tcx> Qualifier<'a, 'tcx, 'tcx> {
             }
         }
 
-        let return_ty = mir.return_ty.unwrap();
+        let return_ty = mir.return_ty;
         self.qualif = self.return_qualif.unwrap_or(Qualif::NOT_CONST);
 
         match self.mode {
@@ -1001,7 +1004,7 @@ impl<'tcx> MirMapPass<'tcx> for QualifyAndPromoteConstants {
 
             // Statics must be Sync.
             if mode == Mode::Static {
-                let ty = mir.return_ty.unwrap();
+                let ty = mir.return_ty;
                 tcx.infer_ctxt(None, None, Reveal::NotSpecializable).enter(|infcx| {
                     let cause = traits::ObligationCause::new(mir.span, id, traits::SharedStatic);
                     let mut fulfillment_cx = traits::FulfillmentContext::new();

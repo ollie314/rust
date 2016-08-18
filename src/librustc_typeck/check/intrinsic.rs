@@ -13,7 +13,7 @@
 
 use intrinsics;
 use rustc::infer::TypeOrigin;
-use rustc::ty::subst::{self, Substs};
+use rustc::ty::subst::Substs;
 use rustc::ty::FnSig;
 use rustc::ty::{self, Ty};
 use {CrateCtxt, require_same_types};
@@ -30,17 +30,17 @@ fn equate_intrinsic_type<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
                                    it: &hir::ForeignItem,
                                    n_tps: usize,
                                    abi: Abi,
-                                   inputs: Vec<ty::Ty<'tcx>>,
-                                   output: ty::FnOutput<'tcx>) {
+                                   inputs: Vec<Ty<'tcx>>,
+                                   output: Ty<'tcx>) {
     let tcx = ccx.tcx;
     let def_id = tcx.map.local_def_id(it.id);
     let i_ty = tcx.lookup_item_type(def_id);
 
-    let mut substs = Substs::empty();
-    substs.types = i_ty.generics.types.map(|def| tcx.mk_param_from_def(def));
+    let substs = Substs::for_item(tcx, def_id,
+                                  |_, _| ty::ReErased,
+                                  |def, _| tcx.mk_param_from_def(def));
 
-    let fty = tcx.mk_fn_def(def_id, tcx.mk_substs(substs),
-                            tcx.mk_bare_fn(ty::BareFnTy {
+    let fty = tcx.mk_fn_def(def_id, substs, tcx.mk_bare_fn(ty::BareFnTy {
         unsafety: hir::Unsafety::Unsafe,
         abi: abi,
         sig: ty::Binder(FnSig {
@@ -49,7 +49,7 @@ fn equate_intrinsic_type<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
             variadic: false,
         }),
     }));
-    let i_n_tps = i_ty.generics.types.len(subst::FnSpace);
+    let i_n_tps = i_ty.generics.types.len();
     if i_n_tps != n_tps {
         struct_span_err!(tcx.sess, it.span, E0094,
             "intrinsic has wrong number of type \
@@ -70,7 +70,7 @@ fn equate_intrinsic_type<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
 pub fn check_intrinsic_type(ccx: &CrateCtxt, it: &hir::ForeignItem) {
     fn param<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>, n: u32) -> Ty<'tcx> {
         let name = token::intern(&format!("P{}", n));
-        ccx.tcx.mk_param(subst::FnSpace, n, name)
+        ccx.tcx.mk_param(n, name)
     }
 
     let tcx = ccx.tcx;
@@ -106,9 +106,9 @@ pub fn check_intrinsic_type(ccx: &CrateCtxt, it: &hir::ForeignItem) {
                 return;
             }
         };
-        (n_tps, inputs, ty::FnConverging(output))
+        (n_tps, inputs, output)
     } else if &name[..] == "abort" || &name[..] == "unreachable" {
-        (0, Vec::new(), ty::FnDiverging)
+        (0, Vec::new(), tcx.types.never)
     } else {
         let (n_tps, inputs, output) = match &name[..] {
             "breakpoint" => (0, Vec::new(), tcx.mk_nil()),
@@ -293,7 +293,7 @@ pub fn check_intrinsic_type(ccx: &CrateCtxt, it: &hir::ForeignItem) {
                     abi: Abi::Rust,
                     sig: ty::Binder(FnSig {
                         inputs: vec![mut_u8],
-                        output: ty::FnOutput::FnConverging(tcx.mk_nil()),
+                        output: tcx.mk_nil(),
                         variadic: false,
                     }),
                 });
@@ -306,7 +306,7 @@ pub fn check_intrinsic_type(ccx: &CrateCtxt, it: &hir::ForeignItem) {
                 return;
             }
         };
-        (n_tps, inputs, ty::FnConverging(output))
+        (n_tps, inputs, output)
     };
     equate_intrinsic_type(ccx, it, n_tps, Abi::RustIntrinsic, inputs, output)
 }
@@ -316,12 +316,12 @@ pub fn check_platform_intrinsic_type(ccx: &CrateCtxt,
                                      it: &hir::ForeignItem) {
     let param = |n| {
         let name = token::intern(&format!("P{}", n));
-        ccx.tcx.mk_param(subst::FnSpace, n, name)
+        ccx.tcx.mk_param(n, name)
     };
 
     let tcx = ccx.tcx;
     let i_ty = tcx.lookup_item_type(tcx.map.local_def_id(it.id));
-    let i_n_tps = i_ty.generics.types.len(subst::FnSpace);
+    let i_n_tps = i_ty.generics.types.len();
     let name = it.name.as_str();
 
     let (n_tps, inputs, output) = match &*name {
@@ -379,7 +379,7 @@ pub fn check_platform_intrinsic_type(ccx: &CrateCtxt,
                     }
                     match_intrinsic_type_to_type(ccx, "return value", it.span,
                                                  &mut structural_to_nomimal,
-                                                 &intr.output, sig.output.unwrap());
+                                                 &intr.output, sig.output);
                     return
                 }
                 None => {
@@ -392,7 +392,7 @@ pub fn check_platform_intrinsic_type(ccx: &CrateCtxt,
     };
 
     equate_intrinsic_type(ccx, it, n_tps, Abi::PlatformIntrinsic,
-                          inputs, ty::FnConverging(output))
+                          inputs, output)
 }
 
 // walk the expected type and the actual type in lock step, checking they're

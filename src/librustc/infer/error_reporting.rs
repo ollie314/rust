@@ -82,7 +82,6 @@ use hir::def::Def;
 use hir::def_id::DefId;
 use infer::{self, TypeOrigin};
 use middle::region;
-use ty::subst;
 use ty::{self, TyCtxt, TypeFoldable};
 use ty::{Region, ReFree};
 use ty::error::TypeError;
@@ -1326,7 +1325,6 @@ impl<'a, 'gcx, 'tcx> Rebuilder<'a, 'gcx, 'tcx> {
                 self.rebuild_arg_ty_or_output(&ret_ty, lifetime, anon_nums, region_names)
             ),
             hir::DefaultReturn(span) => hir::DefaultReturn(span),
-            hir::NoReturn(span) => hir::NoReturn(span)
         }
     }
 
@@ -1367,10 +1365,10 @@ impl<'a, 'gcx, 'tcx> Rebuilder<'a, 'gcx, 'tcx> {
                 hir::TyPath(ref maybe_qself, ref path) => {
                     match self.tcx.expect_def(cur_ty.id) {
                         Def::Enum(did) | Def::TyAlias(did) | Def::Struct(did) => {
-                            let generics = self.tcx.lookup_item_type(did).generics;
+                            let generics = self.tcx.lookup_generics(did);
 
                             let expected =
-                                generics.regions.len(subst::TypeSpace) as u32;
+                                generics.regions.len() as u32;
                             let lifetimes =
                                 path.segments.last().unwrap().parameters.lifetimes();
                             let mut insert = Vec::new();

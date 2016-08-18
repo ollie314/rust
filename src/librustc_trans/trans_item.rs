@@ -28,7 +28,7 @@ use rustc::hir;
 use rustc::hir::map as hir_map;
 use rustc::hir::def_id::DefId;
 use rustc::ty::{self, Ty, TyCtxt, TypeFoldable};
-use rustc::ty::subst;
+use rustc::ty::subst::Substs;
 use rustc_const_eval::fatal_const_eval_err;
 use std::hash::{Hash, Hasher};
 use syntax::ast::{self, NodeId};
@@ -233,7 +233,7 @@ impl<'a, 'tcx> TransItem<'tcx> {
 
         let sig = ty::FnSig {
             inputs: vec![tcx.mk_mut_ptr(tcx.types.i8)],
-            output: ty::FnOutput::FnConverging(tcx.mk_nil()),
+            output: tcx.mk_nil(),
             variadic: false,
         };
 
@@ -352,8 +352,7 @@ impl<'a, 'tcx> TransItem<'tcx> {
             },
             TransItem::Static(node_id) => {
                 let def_id = hir_map.local_def_id(node_id);
-                let instance = Instance::new(def_id,
-                                             tcx.mk_substs(subst::Substs::empty()));
+                let instance = Instance::new(def_id, Substs::empty(tcx));
                 to_string_internal(tcx, "static ", instance)
             },
         };
@@ -412,6 +411,7 @@ pub fn push_unique_type_name<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         ty::TyBool              => output.push_str("bool"),
         ty::TyChar              => output.push_str("char"),
         ty::TyStr               => output.push_str("str"),
+        ty::TyNever             => output.push_str("!"),
         ty::TyInt(ast::IntTy::Is)    => output.push_str("isize"),
         ty::TyInt(ast::IntTy::I8)    => output.push_str("i8"),
         ty::TyInt(ast::IntTy::I16)   => output.push_str("i16"),
@@ -475,10 +475,10 @@ pub fn push_unique_type_name<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             output.push(']');
         },
         ty::TyTrait(ref trait_data) => {
-            push_item_name(tcx, trait_data.principal.skip_binder().def_id, output);
+            push_item_name(tcx, trait_data.principal.def_id(), output);
             push_type_params(tcx,
                              &trait_data.principal.skip_binder().substs.types,
-                             &trait_data.bounds.projection_bounds,
+                             &trait_data.projection_bounds,
                              output);
         },
         ty::TyFnDef(_, _, &ty::BareFnTy{ unsafety, abi, ref sig } ) |
@@ -515,15 +515,9 @@ pub fn push_unique_type_name<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
             output.push(')');
 
-            match sig.output {
-                ty::FnConverging(result_type) if result_type.is_nil() => {}
-                ty::FnConverging(result_type) => {
-                    output.push_str(" -> ");
-                    push_unique_type_name(tcx, result_type, output);
-                }
-                ty::FnDiverging => {
-                    output.push_str(" -> !");
-                }
+            if !sig.output.is_nil() {
+                output.push_str(" -> ");
+                push_unique_type_name(tcx, sig.output, output);
             }
         },
         ty::TyClosure(def_id, ref closure_substs) => {
@@ -566,8 +560,8 @@ fn push_item_name(tcx: TyCtxt,
 }
 
 fn push_type_params<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                              types: &'tcx subst::VecPerParamSpace<Ty<'tcx>>,
-                              projections: &[ty::PolyProjectionPredicate<'tcx>],
+                              types: &[Ty<'tcx>],
+                              projections: &[ty::PolyExistentialProjection<'tcx>],
                               output: &mut String) {
     if types.is_empty() && projections.is_empty() {
         return;
@@ -582,7 +576,7 @@ fn push_type_params<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 
     for projection in projections {
         let projection = projection.skip_binder();
-        let name = &projection.projection_ty.item_name.as_str();
+        let name = &projection.item_name.as_str();
         output.push_str(name);
         output.push_str("=");
         push_unique_type_name(tcx, projection.ty, output);

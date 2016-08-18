@@ -34,7 +34,7 @@ use type_of;
 use value::Value;
 use Disr;
 use rustc::ty::subst::Substs;
-use rustc::ty::adjustment::{AdjustDerefRef, AdjustReifyFnPointer};
+use rustc::ty::adjustment::{AdjustNeverToAny, AdjustDerefRef, AdjustReifyFnPointer};
 use rustc::ty::adjustment::{AdjustUnsafeFnPointer, AdjustMutToConstPointer};
 use rustc::ty::{self, Ty, TyCtxt};
 use rustc::ty::cast::{CastTy,IntTy};
@@ -208,7 +208,7 @@ fn const_fn_call<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
     let arg_ids = args.iter().map(|arg| arg.pat.id);
     let fn_args = arg_ids.zip(arg_vals.iter().cloned()).collect();
 
-    let substs = ccx.tcx().mk_substs(substs.clone().erase_regions());
+    let substs = ccx.tcx().erase_regions(&substs);
     let substs = monomorphize::apply_param_substs(ccx.tcx(),
                                                   param_substs,
                                                   &substs);
@@ -222,7 +222,7 @@ pub fn get_const_expr<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
                                 param_substs: &'tcx Substs<'tcx>)
                                 -> &'tcx hir::Expr {
     let substs = ccx.tcx().node_id_item_substs(ref_expr.id).substs;
-    let substs = ccx.tcx().mk_substs(substs.clone().erase_regions());
+    let substs = ccx.tcx().erase_regions(&substs);
     let substs = monomorphize::apply_param_substs(ccx.tcx(),
                                                   param_substs,
                                                   &substs);
@@ -271,7 +271,7 @@ fn get_const_val<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
                            param_substs: &'tcx Substs<'tcx>)
                            -> Result<ValueRef, ConstEvalFailure> {
     let expr = get_const_expr(ccx, def_id, ref_expr, param_substs);
-    let empty_substs = ccx.tcx().mk_substs(Substs::empty());
+    let empty_substs = Substs::empty(ccx.tcx());
     match get_const_expr_as_global(ccx, expr, ConstQualif::empty(), empty_substs, TrueConst::Yes) {
         Err(Runtime(err)) => {
             report_const_eval_err(ccx.tcx(), &err, expr.span, "expression").emit();
@@ -348,6 +348,7 @@ pub fn const_expr<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
                                                             &cx.tcx().expr_ty_adjusted(e));
     let opt_adj = cx.tcx().tables.borrow().adjustments.get(&e.id).cloned();
     match opt_adj {
+        Some(AdjustNeverToAny(..)) => span_bug!(e.span, "const expression of type ! encountered"),
         Some(AdjustReifyFnPointer) => {
             match ety.sty {
                 ty::TyFnDef(def_id, substs, _) => {
@@ -1159,7 +1160,7 @@ pub fn trans_static(ccx: &CrateContext,
         let v = if use_mir {
             ::mir::trans_static_initializer(ccx, def_id)
         } else {
-            let empty_substs = ccx.tcx().mk_substs(Substs::empty());
+            let empty_substs = Substs::empty(ccx.tcx());
             const_expr(ccx, expr, empty_substs, None, TrueConst::Yes)
                 .map(|(v, _)| v)
         }.map_err(|e| e.into_inner())?;

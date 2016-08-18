@@ -27,7 +27,7 @@ use llvm::debuginfo::{DIType, DIFile, DIScope, DIDescriptor, DICompositeType};
 
 use rustc::hir::def_id::DefId;
 use rustc::hir::pat_util;
-use rustc::ty::subst;
+use rustc::ty::subst::Substs;
 use rustc::hir::map as hir_map;
 use rustc::hir::{self, PatKind};
 use {type_of, adt, machine, monomorphize};
@@ -171,6 +171,7 @@ impl<'tcx> TypeMap<'tcx> {
         unique_type_id.push('{');
 
         match type_.sty {
+            ty::TyNever    |
             ty::TyBool     |
             ty::TyChar     |
             ty::TyStr      |
@@ -278,16 +279,9 @@ impl<'tcx> TypeMap<'tcx> {
                 }
 
                 unique_type_id.push_str(")->");
-                match sig.output {
-                    ty::FnConverging(ret_ty) => {
-                        let return_type_id = self.get_unique_type_id_of_type(cx, ret_ty);
-                        let return_type_id = self.get_unique_type_id_as_string(return_type_id);
-                        unique_type_id.push_str(&return_type_id[..]);
-                    }
-                    ty::FnDiverging => {
-                        unique_type_id.push_str("!");
-                    }
-                }
+                let return_type_id = self.get_unique_type_id_of_type(cx, sig.output);
+                let return_type_id = self.get_unique_type_id_as_string(return_type_id);
+                unique_type_id.push_str(&return_type_id[..]);
             },
             ty::TyClosure(_, substs) if substs.upvar_tys.is_empty() => {
                 push_debuginfo_type_name(cx, type_, false, &mut unique_type_id);
@@ -321,7 +315,7 @@ impl<'tcx> TypeMap<'tcx> {
         fn from_def_id_and_substs<'a, 'tcx>(type_map: &mut TypeMap<'tcx>,
                                             cx: &CrateContext<'a, 'tcx>,
                                             def_id: DefId,
-                                            substs: &subst::Substs<'tcx>,
+                                            substs: &Substs<'tcx>,
                                             output: &mut String) {
             // First, find out the 'real' def_id of the type. Items inlined from
             // other crates have to be mapped back to their source.
@@ -352,7 +346,7 @@ impl<'tcx> TypeMap<'tcx> {
             // Add the def-index as the second part
             output.push_str(&format!("{:x}", def_id.index.as_usize()));
 
-            let tps = substs.types.get_slice(subst::TypeSpace);
+            let tps = &substs.types;
             if !tps.is_empty() {
                 output.push('<');
 
@@ -595,12 +589,9 @@ fn subroutine_type_metadata<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
     let mut signature_metadata: Vec<DIType> = Vec::with_capacity(signature.inputs.len() + 1);
 
     // return type
-    signature_metadata.push(match signature.output {
-        ty::FnConverging(ret_ty) => match ret_ty.sty {
-            ty::TyTuple(ref tys) if tys.is_empty() => ptr::null_mut(),
-            _ => type_metadata(cx, ret_ty, span)
-        },
-        ty::FnDiverging => diverging_type_metadata(cx)
+    signature_metadata.push(match signature.output.sty {
+        ty::TyTuple(ref tys) if tys.is_empty() => ptr::null_mut(),
+        _ => type_metadata(cx, signature.output, span)
     });
 
     // regular arguments
@@ -636,7 +627,7 @@ fn trait_pointer_metadata<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
     // But it does not describe the trait's methods.
 
     let def_id = match trait_type.sty {
-        ty::TyTrait(ref data) => data.principal_def_id(),
+        ty::TyTrait(ref data) => data.principal.def_id(),
         _ => {
             bug!("debuginfo: Unexpected trait-object type in \
                   trait_pointer_metadata(): {:?}",
@@ -704,6 +695,7 @@ pub fn type_metadata<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
 
     let sty = &t.sty;
     let MetadataCreationResult { metadata, already_stored_in_typemap } = match *sty {
+        ty::TyNever    |
         ty::TyBool     |
         ty::TyChar     |
         ty::TyInt(_)   |
@@ -914,23 +906,13 @@ pub fn scope_metadata(fcx: &FunctionContext,
     }
 }
 
-pub fn diverging_type_metadata(cx: &CrateContext) -> DIType {
-    unsafe {
-        llvm::LLVMRustDIBuilderCreateBasicType(
-            DIB(cx),
-            "!\0".as_ptr() as *const _,
-            bytes_to_bits(0),
-            bytes_to_bits(0),
-            DW_ATE_unsigned)
-    }
-}
-
 fn basic_type_metadata<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
                                  t: Ty<'tcx>) -> DIType {
 
     debug!("basic_type_metadata: {:?}", t);
 
     let (name, encoding) = match t.sty {
+        ty::TyNever => ("!", DW_ATE_unsigned),
         ty::TyTuple(ref elements) if elements.is_empty() =>
             ("()", DW_ATE_unsigned),
         ty::TyBool => ("bool", DW_ATE_boolean),
@@ -1104,7 +1086,7 @@ impl<'tcx> MemberDescriptionFactory<'tcx> {
 // Creates MemberDescriptions for the fields of a struct
 struct StructMemberDescriptionFactory<'tcx> {
     variant: ty::VariantDef<'tcx>,
-    substs: &'tcx subst::Substs<'tcx>,
+    substs: &'tcx Substs<'tcx>,
     is_simd: bool,
     span: Span,
 }

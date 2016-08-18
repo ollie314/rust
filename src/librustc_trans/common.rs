@@ -523,7 +523,7 @@ impl<'a, 'tcx> FunctionContext<'a, 'tcx> {
         let tcx = ccx.tcx();
         match tcx.lang_items.eh_personality() {
             Some(def_id) if !base::wants_msvc_seh(ccx.sess()) => {
-                Callee::def(ccx, def_id, tcx.mk_substs(Substs::empty())).reify(ccx).val
+                Callee::def(ccx, def_id, Substs::empty(tcx)).reify(ccx).val
             }
             _ => {
                 if let Some(llpersonality) = ccx.eh_personality().get() {
@@ -550,7 +550,7 @@ impl<'a, 'tcx> FunctionContext<'a, 'tcx> {
         let tcx = ccx.tcx();
         assert!(ccx.sess().target.target.options.custom_unwind_resume);
         if let Some(def_id) = tcx.lang_items.eh_unwind_resume() {
-            return Callee::def(ccx, def_id, tcx.mk_substs(Substs::empty()));
+            return Callee::def(ccx, def_id, Substs::empty(tcx));
         }
 
         let ty = tcx.mk_fn_ptr(tcx.mk_bare_fn(ty::BareFnTy {
@@ -558,7 +558,7 @@ impl<'a, 'tcx> FunctionContext<'a, 'tcx> {
             abi: Abi::C,
             sig: ty::Binder(ty::FnSig {
                 inputs: vec![tcx.mk_mut_ptr(tcx.types.u8)],
-                output: ty::FnDiverging,
+                output: tcx.types.never,
                 variadic: false
             }),
         }));
@@ -1240,8 +1240,8 @@ pub fn inlined_variant_def<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
            inlined_vid);
     let adt_def = match ctor_ty.sty {
         ty::TyFnDef(_, _, &ty::BareFnTy { sig: ty::Binder(ty::FnSig {
-            output: ty::FnConverging(ty), ..
-        }), ..}) => ty,
+            output, ..
+        }), ..}) => output,
         _ => ctor_ty
     }.ty_adt_def().unwrap();
     let variant_def_id = if ccx.tcx().map.is_inlined_node_id(inlined_vid) {

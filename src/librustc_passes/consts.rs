@@ -283,10 +283,10 @@ impl<'a, 'tcx, 'v> Visitor<'v> for CheckCrateVisitor<'a, 'tcx> {
                     Ok(Ordering::Less) |
                     Ok(Ordering::Equal) => {}
                     Ok(Ordering::Greater) => {
-                        span_err!(self.tcx.sess,
-                                  start.span,
-                                  E0030,
-                                  "lower range bound must be less than or equal to upper");
+                        struct_span_err!(self.tcx.sess, start.span, E0030,
+                            "lower range bound must be less than or equal to upper")
+                            .span_label(start.span, &format!("lower bound larger than upper bound"))
+                            .emit();
                     }
                     Err(ErrorReported) => {}
                 }
@@ -632,6 +632,7 @@ fn check_expr<'a, 'tcx>(v: &mut CheckCrateVisitor<'a, 'tcx>, e: &hir::Expr, node
 fn check_adjustments<'a, 'tcx>(v: &mut CheckCrateVisitor<'a, 'tcx>, e: &hir::Expr) {
     match v.tcx.tables.borrow().adjustments.get(&e.id) {
         None |
+        Some(&ty::adjustment::AdjustNeverToAny(..)) |
         Some(&ty::adjustment::AdjustReifyFnPointer) |
         Some(&ty::adjustment::AdjustUnsafeFnPointer) |
         Some(&ty::adjustment::AdjustMutToConstPointer) => {}

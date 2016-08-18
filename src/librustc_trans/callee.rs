@@ -22,7 +22,7 @@ use back::symbol_names;
 use llvm::{self, ValueRef, get_params};
 use middle::cstore::LOCAL_CRATE;
 use rustc::hir::def_id::DefId;
-use rustc::ty::subst;
+use rustc::ty::subst::Substs;
 use rustc::traits;
 use rustc::hir::map as hir_map;
 use abi::{Abi, FnType};
@@ -105,13 +105,12 @@ impl<'tcx> Callee<'tcx> {
     /// Function or method definition.
     pub fn def<'a>(ccx: &CrateContext<'a, 'tcx>,
                    def_id: DefId,
-                   substs: &'tcx subst::Substs<'tcx>)
+                   substs: &'tcx Substs<'tcx>)
                    -> Callee<'tcx> {
         let tcx = ccx.tcx();
 
-        if substs.self_ty().is_some() {
-            // Only trait methods can have a Self parameter.
-            return Callee::trait_method(ccx, def_id, substs);
+        if let Some(trait_id) = tcx.trait_of_item(def_id) {
+            return Callee::trait_method(ccx, trait_id, def_id, substs);
         }
 
         let maybe_node_id = inline::get_local_instance(ccx, def_id)
@@ -144,24 +143,21 @@ impl<'tcx> Callee<'tcx> {
 
     /// Trait method, which has to be resolved to an impl method.
     pub fn trait_method<'a>(ccx: &CrateContext<'a, 'tcx>,
+                            trait_id: DefId,
                             def_id: DefId,
-                            substs: &'tcx subst::Substs<'tcx>)
+                            substs: &'tcx Substs<'tcx>)
                             -> Callee<'tcx> {
         let tcx = ccx.tcx();
 
-        let method_item = tcx.impl_or_trait_item(def_id);
-        let trait_id = method_item.container().id();
-        let trait_ref = ty::Binder(substs.to_trait_ref(tcx, trait_id));
-        let trait_ref = tcx.normalize_associated_type(&trait_ref);
+        let trait_ref = ty::TraitRef::from_method(tcx, trait_id, substs);
+        let trait_ref = tcx.normalize_associated_type(&ty::Binder(trait_ref));
         match common::fulfill_obligation(ccx.shared(), DUMMY_SP, trait_ref) {
             traits::VtableImpl(vtable_impl) => {
                 let impl_did = vtable_impl.impl_def_id;
                 let mname = tcx.item_name(def_id);
                 // create a concatenated set of substitutions which includes
                 // those from the impl and those from the method:
-                let impl_substs = vtable_impl.substs.with_method_from(&substs);
-                let substs = tcx.mk_substs(impl_substs);
-                let mth = meth::get_impl_method(tcx, impl_did, substs, mname);
+                let mth = meth::get_impl_method(tcx, substs, impl_did, vtable_impl.substs, mname);
 
                 // Translate the function, bypassing Callee::def.
                 // That is because default methods have the same ID as the
@@ -275,7 +271,7 @@ impl<'tcx> Callee<'tcx> {
 /// Given a DefId and some Substs, produces the monomorphic item type.
 fn def_ty<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                     def_id: DefId,
-                    substs: &'tcx subst::Substs<'tcx>)
+                    substs: &'tcx Substs<'tcx>)
                     -> Ty<'tcx> {
     let ty = tcx.lookup_item_type(def_id).ty;
     monomorphize::apply_param_substs(tcx, substs, &ty)
@@ -427,7 +423,7 @@ pub fn trans_fn_pointer_shim<'a, 'tcx>(
 /// - `substs`: values for each of the fn/method's parameters
 fn get_fn<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
                     def_id: DefId,
-                    substs: &'tcx subst::Substs<'tcx>)
+                    substs: &'tcx Substs<'tcx>)
                     -> Datum<'tcx, Rvalue> {
     let tcx = ccx.tcx();
 
@@ -641,10 +637,7 @@ fn trans_call_inner<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
     let opt_llretslot = dest.and_then(|dest| match dest {
         expr::SaveIn(dst) => Some(dst),
         expr::Ignore => {
-            let needs_drop = || match output {
-                ty::FnConverging(ret_ty) => bcx.fcx.type_needs_drop(ret_ty),
-                ty::FnDiverging => false
-            };
+            let needs_drop = || bcx.fcx.type_needs_drop(output);
             if fn_ty.ret.is_indirect() || fn_ty.ret.cast.is_some() || needs_drop() {
                 // Push the out-pointer if we use an out-pointer for this
                 // return type, otherwise push "undef".
@@ -706,16 +699,17 @@ fn trans_call_inner<'a, 'blk, 'tcx>(mut bcx: Block<'blk, 'tcx>,
 
     // If the caller doesn't care about the result of this fn call,
     // drop the temporary slot we made.
-    match (dest, opt_llretslot, output) {
-        (Some(expr::Ignore), Some(llretslot), ty::FnConverging(ret_ty)) => {
+    match (dest, opt_llretslot) {
+        (Some(expr::Ignore), Some(llretslot)) => {
             // drop the value if it is not being saved.
-            bcx = glue::drop_ty(bcx, llretslot, ret_ty, debug_loc);
+            bcx = glue::drop_ty(bcx, llretslot, output, debug_loc);
             call_lifetime_end(bcx, llretslot);
         }
         _ => {}
     }
 
-    if output == ty::FnDiverging {
+    // FIXME(canndrew): This is_never should really be an is_uninhabited
+    if output.is_never() {
         Unreachable(bcx);
     }
 

@@ -895,7 +895,7 @@ fn compare_values<'blk, 'tcx>(cx: Block<'blk, 'tcx>,
                            &format!("comparison of `{}`", rhs_t),
                            StrEqFnLangItem);
         let args = [lhs_data, lhs_len, rhs_data, rhs_len];
-        Callee::def(bcx.ccx(), did, bcx.tcx().mk_substs(Substs::empty()))
+        Callee::def(bcx.ccx(), did, Substs::empty(bcx.tcx()))
             .call(bcx, debug_loc, ArgVals(&args), None)
     }
 
@@ -1593,7 +1593,7 @@ fn trans_match_inner<'blk, 'tcx>(scope_cx: Block<'blk, 'tcx>,
     }
 
     let t = node_id_type(bcx, discr_expr.id);
-    let chk = if t.is_empty(tcx) {
+    let chk = if t.is_uninhabited(tcx) {
         Unreachable
     } else {
         Infallible

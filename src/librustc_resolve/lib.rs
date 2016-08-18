@@ -49,7 +49,6 @@ use rustc::lint;
 use rustc::hir::def::*;
 use rustc::hir::def_id::{CRATE_DEF_INDEX, DefId};
 use rustc::ty;
-use rustc::ty::subst::{ParamSpace, FnSpace, TypeSpace};
 use rustc::hir::{Freevar, FreevarMap, TraitCandidate, TraitMap, GlobMap};
 use rustc::util::nodemap::{NodeMap, NodeSet, FnvHashMap, FnvHashSet};
 
@@ -117,7 +116,7 @@ enum ResolutionError<'a> {
     /// error E0408: variable `{}` from pattern #{} is not bound in pattern #{}
     VariableNotBoundInPattern(Name, usize, usize),
     /// error E0409: variable is bound with different mode in pattern #{} than in pattern #1
-    VariableBoundWithDifferentMode(Name, usize),
+    VariableBoundWithDifferentMode(Name, usize, Span),
     /// error E0411: use of `Self` outside of an impl or trait
     SelfUsedOutsideImplOrTrait,
     /// error E0412: use of undeclared
@@ -270,14 +269,19 @@ fn resolve_struct_error<'b, 'a: 'b, 'c>(resolver: &'b Resolver<'a>,
                              from,
                              to)
         }
-        ResolutionError::VariableBoundWithDifferentMode(variable_name, pattern_number) => {
-            struct_span_err!(resolver.session,
+        ResolutionError::VariableBoundWithDifferentMode(variable_name,
+                                                        pattern_number,
+                                                        first_binding_span) => {
+            let mut err = struct_span_err!(resolver.session,
                              span,
                              E0409,
                              "variable `{}` is bound with different mode in pattern #{} than in \
                               pattern #1",
                              variable_name,
-                             pattern_number)
+                             pattern_number);
+            err.span_label(span, &format!("bound in different ways"));
+            err.span_label(first_binding_span, &format!("first binding"));
+            err
         }
         ResolutionError::SelfUsedOutsideImplOrTrait => {
             let mut err = struct_span_err!(resolver.session,
@@ -317,11 +321,13 @@ fn resolve_struct_error<'b, 'a: 'b, 'c>(resolver: &'b Resolver<'a>,
             err
         }
         ResolutionError::DoesNotNameAStruct(name) => {
-            struct_span_err!(resolver.session,
+            let mut err = struct_span_err!(resolver.session,
                              span,
                              E0422,
                              "`{}` does not name a structure",
-                             name)
+                             name);
+            err.span_label(span, &format!("not a structure"));
+            err
         }
         ResolutionError::StructVariantUsedAsFunction(path_name) => {
             struct_span_err!(resolver.session,
@@ -557,7 +563,7 @@ impl<'a> Visitor for Resolver<'a> {
     fn visit_foreign_item(&mut self, foreign_item: &ForeignItem) {
         let type_parameters = match foreign_item.node {
             ForeignItemKind::Fn(_, ref generics) => {
-                HasTypeParameters(generics, FnSpace, ItemRibKind)
+                HasTypeParameters(generics, ItemRibKind)
             }
             ForeignItemKind::Static(..) => NoTypeParameters,
         };
@@ -624,10 +630,6 @@ enum TypeParameters<'a, 'b> {
     NoTypeParameters,
     HasTypeParameters(// Type parameters.
                       &'b Generics,
-
-                      // Identifies the things that these parameters
-                      // were declared on (type, fn, etc)
-                      ParamSpace,
 
                       // The kind of the rib used for type parameters.
                       RibKind<'a>),
@@ -1613,12 +1615,9 @@ impl<'a> Resolver<'a> {
         match item.node {
             ItemKind::Enum(_, ref generics) |
             ItemKind::Ty(_, ref generics) |
-            ItemKind::Struct(_, ref generics) => {
-                self.with_type_parameter_rib(HasTypeParameters(generics, TypeSpace, ItemRibKind),
-                                             |this| visit::walk_item(this, item));
-            }
+            ItemKind::Struct(_, ref generics) |
             ItemKind::Fn(_, _, _, _, ref generics, _) => {
-                self.with_type_parameter_rib(HasTypeParameters(generics, FnSpace, ItemRibKind),
+                self.with_type_parameter_rib(HasTypeParameters(generics, ItemRibKind),
                                              |this| visit::walk_item(this, item));
             }
 
@@ -1634,10 +1633,7 @@ impl<'a> Resolver<'a> {
 
             ItemKind::Trait(_, ref generics, ref bounds, ref trait_items) => {
                 // Create a new rib for the trait-wide type parameters.
-                self.with_type_parameter_rib(HasTypeParameters(generics,
-                                                               TypeSpace,
-                                                               ItemRibKind),
-                                             |this| {
+                self.with_type_parameter_rib(HasTypeParameters(generics, ItemRibKind), |this| {
                     let local_def_id = this.definitions.local_def_id(item.id);
                     this.with_self_rib(Def::SelfTy(Some(local_def_id), None), |this| {
                         this.visit_generics(generics);
@@ -1660,7 +1656,6 @@ impl<'a> Resolver<'a> {
                                 TraitItemKind::Method(ref sig, _) => {
                                     let type_parameters =
                                         HasTypeParameters(&sig.generics,
-                                                          FnSpace,
                                                           MethodRibKind(!sig.decl.has_self()));
                                     this.with_type_parameter_rib(type_parameters, |this| {
                                         visit::walk_trait_item(this, trait_item)
@@ -1729,10 +1724,10 @@ impl<'a> Resolver<'a> {
         where F: FnOnce(&mut Resolver)
     {
         match type_parameters {
-            HasTypeParameters(generics, space, rib_kind) => {
+            HasTypeParameters(generics, rib_kind) => {
                 let mut function_type_rib = Rib::new(rib_kind);
                 let mut seen_bindings = HashSet::new();
-                for (index, type_parameter) in generics.ty_params.iter().enumerate() {
+                for type_parameter in &generics.ty_params {
                     let name = type_parameter.ident.name;
                     debug!("with_type_parameter_rib: {}", type_parameter.id);
 
@@ -1745,7 +1740,7 @@ impl<'a> Resolver<'a> {
 
                     // plain insert (no renaming)
                     let def_id = self.definitions.local_def_id(type_parameter.id);
-                    let def = Def::TyParam(space, index as u32, def_id, name);
+                    let def = Def::TyParam(def_id);
                     function_type_rib.bindings.insert(ast::Ident::with_empty_ctxt(name), def);
                     self.record_def(type_parameter.id, PathResolution::new(def));
                 }
@@ -1917,10 +1912,7 @@ impl<'a> Resolver<'a> {
                               item_id: NodeId,
                               impl_items: &[ImplItem]) {
         // If applicable, create a rib for the type parameters.
-        self.with_type_parameter_rib(HasTypeParameters(generics,
-                                                       TypeSpace,
-                                                       ItemRibKind),
-                                     |this| {
+        self.with_type_parameter_rib(HasTypeParameters(generics, ItemRibKind), |this| {
             // Resolve the type parameters.
             this.visit_generics(generics);
 
@@ -1953,7 +1945,6 @@ impl<'a> Resolver<'a> {
                                     // specific type parameters.
                                     let type_parameters =
                                         HasTypeParameters(&sig.generics,
-                                                          FnSpace,
                                                           MethodRibKind(!sig.decl.has_self()));
                                     this.with_type_parameter_rib(type_parameters, |this| {
                                         visit::walk_impl_item(this, impl_item);
@@ -2044,8 +2035,10 @@ impl<'a> Resolver<'a> {
                         if binding_0.binding_mode != binding_i.binding_mode {
                             resolve_error(self,
                                           binding_i.span,
-                                          ResolutionError::VariableBoundWithDifferentMode(key.name,
-                                                                                          i + 1));
+                                          ResolutionError::VariableBoundWithDifferentMode(
+                                              key.name,
+                                              i + 1,
+                                              binding_0.span));
                         }
                     }
                 }

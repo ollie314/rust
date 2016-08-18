@@ -215,7 +215,7 @@ fn check_expr(cx: &mut MatchCheckCtxt, ex: &hir::Expr) {
             // Check for empty enum, because is_useful only works on inhabited types.
             let pat_ty = cx.tcx.node_id_to_type(scrut.id);
             if inlined_arms.is_empty() {
-                if !pat_ty.is_empty(cx.tcx) {
+                if !pat_ty.is_uninhabited(cx.tcx) {
                     // We know the type is inhabited, so this must be wrong
                     let mut err = struct_span_err!(cx.tcx.sess, ex.span, E0002,
                                                    "non-exhaustive patterns: type {} is non-empty",
@@ -225,7 +225,7 @@ fn check_expr(cx: &mut MatchCheckCtxt, ex: &hir::Expr) {
                          possibly adding wildcards or more match arms.");
                     err.emit();
                 }
-                // If the type *is* empty, it's vacuously exhaustive
+                // If the type *is* uninhabited, it's vacuously exhaustive
                 return;
             }
 
@@ -1073,11 +1073,12 @@ fn check_irrefutable(cx: &MatchCheckCtxt, pat: &Pat, is_fn_arg: bool) {
     };
 
     is_refutable(cx, pat, |uncovered_pat| {
-        span_err!(cx.tcx.sess, pat.span, E0005,
+        let pattern_string = pat_to_string(uncovered_pat);
+        struct_span_err!(cx.tcx.sess, pat.span, E0005,
             "refutable pattern in {}: `{}` not covered",
             origin,
-            pat_to_string(uncovered_pat),
-        );
+            pattern_string,
+        ).span_label(pat.span, &format!("pattern `{}` not covered", pattern_string)).emit();
     });
 }
 

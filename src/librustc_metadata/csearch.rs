@@ -86,7 +86,7 @@ impl<'tcx> CrateStore<'tcx> for cstore::CStore {
     }
 
     fn item_type<'a>(&self, tcx: TyCtxt<'a, 'tcx, 'tcx>, def: DefId)
-                     -> ty::TypeScheme<'tcx>
+                     -> Ty<'tcx>
     {
         self.dep_graph.read(DepNode::MetaData(def));
         let cdata = self.get_crate_data(def.krate);
@@ -107,6 +107,14 @@ impl<'tcx> CrateStore<'tcx> for cstore::CStore {
         self.dep_graph.read(DepNode::MetaData(def));
         let cdata = self.get_crate_data(def.krate);
         decoder::get_super_predicates(&cdata, def.index, tcx)
+    }
+
+    fn item_generics<'a>(&self, tcx: TyCtxt<'a, 'tcx, 'tcx>, def: DefId)
+                         -> &'tcx ty::Generics<'tcx>
+    {
+        self.dep_graph.read(DepNode::MetaData(def));
+        let cdata = self.get_crate_data(def.krate);
+        decoder::get_generics(&cdata, def.index, tcx)
     }
 
     fn item_attrs(&self, def_id: DefId) -> Vec<ast::Attribute>
@@ -231,11 +239,10 @@ impl<'tcx> CrateStore<'tcx> for cstore::CStore {
         decoder::get_parent_impl(&*cdata, impl_def.index)
     }
 
-    fn trait_of_item<'a>(&self, tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId) -> Option<DefId>
-    {
+    fn trait_of_item(&self, def_id: DefId) -> Option<DefId> {
         self.dep_graph.read(DepNode::MetaData(def_id));
         let cdata = self.get_crate_data(def_id.krate);
-        decoder::get_trait_of_item(&cdata, def_id.index, tcx)
+        decoder::get_trait_of_item(&cdata, def_id.index)
     }
 
     fn impl_or_trait_item<'a>(&self, tcx: TyCtxt<'a, 'tcx, 'tcx>, def: DefId)
@@ -407,6 +414,10 @@ impl<'tcx> CrateStore<'tcx> for cstore::CStore {
     {
         let cdata = self.get_crate_data(cnum);
         decoder::get_reachable_ids(&cdata)
+    }
+
+    fn is_no_builtins(&self, cnum: ast::CrateNum) -> bool {
+        attr::contains_name(&self.crate_attrs(cnum), "no_builtins")
     }
 
     fn def_index_for_def_key(&self,
