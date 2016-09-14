@@ -45,25 +45,12 @@ pub const tag_items_closure_kind: usize = 0x2a;
 pub const tag_items_closure_ty: usize = 0x2b;
 pub const tag_def_key: usize = 0x2c;
 
-// GAP 0x2d 0x2e
+// GAP 0x2d 0x34
 
 pub const tag_index: usize = 0x110; // top-level only
 pub const tag_xref_index: usize = 0x111; // top-level only
 pub const tag_xref_data: usize = 0x112; // top-level only
-
-pub const tag_meta_item_name_value: usize = 0x2f;
-
-pub const tag_meta_item_name: usize = 0x30;
-
-pub const tag_meta_item_value: usize = 0x31;
-
 pub const tag_attributes: usize = 0x101; // top-level only
-
-pub const tag_attribute: usize = 0x32;
-
-pub const tag_meta_item_word: usize = 0x33;
-
-pub const tag_meta_item_list: usize = 0x34;
 
 // The list of crates that this crate depends on
 pub const tag_crate_deps: usize = 0x102; // top-level only
@@ -162,9 +149,9 @@ pub const tag_items_data_item_visibility: usize = 0x78;
 pub const tag_items_data_item_inherent_impl: usize = 0x79;
 // GAP 0x7a
 pub const tag_mod_child: usize = 0x7b;
-pub const tag_misc_info: usize = 0x108; // top-level only
-pub const tag_misc_info_crate_items: usize = 0x7c;
+// GAP 0x7c
 
+// GAP 0x108
 pub const tag_impls: usize = 0x109; // top-level only
 pub const tag_impls_trait: usize = 0x7d;
 pub const tag_impls_trait_impl: usize = 0x7e;
@@ -246,6 +233,8 @@ pub fn rustc_version() -> String {
 }
 
 pub const tag_panic_strategy: usize = 0x114;
+
+pub const tag_macro_derive_registrar: usize = 0x115;
 
 // NB: increment this if you change the format of metadata such that
 // rustc_version can't be found.

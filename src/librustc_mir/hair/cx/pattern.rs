@@ -161,7 +161,7 @@ impl<'patcx, 'cx, 'gcx, 'tcx> PatCx<'patcx, 'cx, 'gcx, 'tcx> {
                 let id = self.cx.tcx.expect_def(pat.id).var_id();
                 let var_ty = self.cx.tcx.node_id_to_type(pat.id);
                 let region = match var_ty.sty {
-                    ty::TyRef(&r, _) => Some(r),
+                    ty::TyRef(r, _) => Some(r),
                     _ => None,
                 };
                 let (mutability, mode) = match bm {
@@ -198,8 +198,8 @@ impl<'patcx, 'cx, 'gcx, 'tcx> PatCx<'patcx, 'cx, 'gcx, 'tcx> {
             PatKind::TupleStruct(_, ref subpatterns, ddpos) => {
                 let pat_ty = self.cx.tcx.node_id_to_type(pat.id);
                 let adt_def = match pat_ty.sty {
-                    ty::TyStruct(adt_def, _) | ty::TyEnum(adt_def, _) => adt_def,
-                    _ => span_bug!(pat.span, "tuple struct pattern not applied to struct or enum"),
+                    ty::TyAdt(adt_def, _) => adt_def,
+                    _ => span_bug!(pat.span, "tuple struct pattern not applied to an ADT"),
                 };
                 let variant_def = adt_def.variant_of_def(self.cx.tcx.expect_def(pat.id));
 
@@ -217,11 +217,11 @@ impl<'patcx, 'cx, 'gcx, 'tcx> PatCx<'patcx, 'cx, 'gcx, 'tcx> {
             PatKind::Struct(_, ref fields, _) => {
                 let pat_ty = self.cx.tcx.node_id_to_type(pat.id);
                 let adt_def = match pat_ty.sty {
-                    ty::TyStruct(adt_def, _) | ty::TyEnum(adt_def, _) => adt_def,
+                    ty::TyAdt(adt_def, _) => adt_def,
                     _ => {
                         span_bug!(
                             pat.span,
-                            "struct pattern not applied to struct or enum");
+                            "struct pattern not applied to an ADT");
                     }
                 };
                 let variant_def = adt_def.variant_of_def(self.cx.tcx.expect_def(pat.id));
@@ -313,7 +313,8 @@ impl<'patcx, 'cx, 'gcx, 'tcx> PatCx<'patcx, 'cx, 'gcx, 'tcx> {
                 }
             }
 
-            Def::Struct(..) | Def::TyAlias(..) | Def::AssociatedTy(..) => {
+            Def::Struct(..) | Def::Union(..) |
+            Def::TyAlias(..) | Def::AssociatedTy(..) => {
                 PatternKind::Leaf { subpatterns: subpatterns }
             }
 

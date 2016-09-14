@@ -76,6 +76,7 @@ This API is completely unstable and subject to change.
 
 #![feature(box_patterns)]
 #![feature(box_syntax)]
+#![feature(dotdot_in_tuple_patterns)]
 #![feature(quote)]
 #![feature(rustc_diagnostic_macros)]
 #![feature(rustc_private)]
@@ -172,7 +173,7 @@ fn write_substs_to_tcx<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
                node_id,
                item_substs);
 
-        assert!(!item_substs.substs.types.needs_infer());
+        assert!(!item_substs.substs.needs_infer());
 
         ccx.tcx.tables.borrow_mut().item_substs.insert(node_id, item_substs);
     }
@@ -215,11 +216,11 @@ fn check_main_fn_ty(ccx: &CrateCtxt,
             match tcx.map.find(main_id) {
                 Some(hir_map::NodeItem(it)) => {
                     match it.node {
-                        hir::ItemFn(_, _, _, _, ref generics, _) => {
-                            if let Some(gen_span) = generics.span() {
-                                struct_span_err!(ccx.tcx.sess, gen_span, E0131,
+                        hir::ItemFn(.., ref generics, _) => {
+                            if generics.is_parameterized() {
+                                struct_span_err!(ccx.tcx.sess, generics.span, E0131,
                                          "main function is not allowed to have type parameters")
-                                    .span_label(gen_span,
+                                    .span_label(generics.span,
                                                 &format!("main cannot have type parameters"))
                                     .emit();
                                 return;
@@ -267,12 +268,11 @@ fn check_start_fn_ty(ccx: &CrateCtxt,
             match tcx.map.find(start_id) {
                 Some(hir_map::NodeItem(it)) => {
                     match it.node {
-                        hir::ItemFn(_,_,_,_,ref ps,_)
+                        hir::ItemFn(..,ref ps,_)
                         if ps.is_parameterized() => {
-                            let sp = if let Some(sp) = ps.span() { sp } else { start_span };
-                            struct_span_err!(tcx.sess, sp, E0132,
+                            struct_span_err!(tcx.sess, ps.span, E0132,
                                 "start function is not allowed to have type parameters")
-                                .span_label(sp,
+                                .span_label(ps.span,
                                             &format!("start function cannot have type parameters"))
                                 .emit();
                             return;

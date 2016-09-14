@@ -162,12 +162,6 @@ ifdef CFG_ENABLE_DEBUGINFO
   CFG_RUSTC_FLAGS += -g
 endif
 
-ifdef CFG_DISABLE_ORBIT
-  $(info cfg: HOLD HOLD HOLD (CFG_DISABLE_ORBIT))
-  RUSTFLAGS_STAGE1 += -Z orbit=off
-  RUSTFLAGS_STAGE2 += -Z orbit=off
-endif
-
 ifdef SAVE_TEMPS
   CFG_RUSTC_FLAGS += -C save-temps
 endif
@@ -306,7 +300,7 @@ endif
 # LLVM macros
 ######################################################################
 
-LLVM_OPTIONAL_COMPONENTS=x86 arm aarch64 mips powerpc pnacl
+LLVM_OPTIONAL_COMPONENTS=x86 arm aarch64 mips powerpc pnacl systemz
 LLVM_REQUIRED_COMPONENTS=ipo bitreader bitwriter linker asmparser mcjit \
                 interpreter instrumentation
 
@@ -354,6 +348,7 @@ LLVM_AS_$(1)=$$(CFG_LLVM_INST_DIR_$(1))/bin/llvm-as$$(X_$(1))
 LLC_$(1)=$$(CFG_LLVM_INST_DIR_$(1))/bin/llc$$(X_$(1))
 
 LLVM_ALL_COMPONENTS_$(1)=$$(shell "$$(LLVM_CONFIG_$(1))" --components)
+LLVM_VERSION_$(1)=$$(shell "$$(LLVM_CONFIG_$(1))" --version)
 
 endef
 
@@ -460,7 +455,10 @@ endif
 TSREQ$(1)_T_$(2)_H_$(3) = \
 	$$(HSREQ$(1)_H_$(3)) \
 	$$(foreach obj,$$(REQUIRED_OBJECTS_$(2)),\
-		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(obj))
+		$$(TLIB$(1)_T_$(2)_H_$(3))/$$(obj)) \
+	$$(TLIB0_T_$(2)_H_$(3))/$$(call CFG_STATIC_LIB_NAME_$(2),compiler-rt)
+# ^ This copies `libcompiler-rt.a` to the stage0 sysroot
+# ^ TODO(stage0) update this to not copy `libcompiler-rt.a` to stage0
 
 # Prerequisites for a working stageN compiler and libraries, for a specific
 # target

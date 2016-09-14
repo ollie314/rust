@@ -911,7 +911,7 @@ pub enum Rvalue<'tcx> {
     Repeat(Operand<'tcx>, TypedConstVal<'tcx>),
 
     /// &x or &mut x
-    Ref(Region, BorrowKind, Lvalue<'tcx>),
+    Ref(&'tcx Region, BorrowKind, Lvalue<'tcx>),
 
     /// length of a [X] or [X;n] value
     Len(Lvalue<'tcx>),
@@ -962,7 +962,10 @@ pub enum CastKind {
 pub enum AggregateKind<'tcx> {
     Vec,
     Tuple,
-    Adt(AdtDef<'tcx>, usize, &'tcx Substs<'tcx>),
+    /// The second field is variant number (discriminant), it's equal to 0
+    /// for struct and union expressions. The fourth field is active field
+    /// number and is present only for union expressions.
+    Adt(AdtDef<'tcx>, usize, &'tcx Substs<'tcx>, Option<usize>),
     Closure(DefId, ClosureSubsts<'tcx>),
 }
 
@@ -1069,7 +1072,7 @@ impl<'tcx> Debug for Rvalue<'tcx> {
                         }
                     }
 
-                    Adt(adt_def, variant, substs) => {
+                    Adt(adt_def, variant, substs, _) => {
                         let variant_def = &adt_def.variants[variant];
 
                         ppaux::parameterized(fmt, substs, variant_def.did,
@@ -1239,3 +1242,14 @@ impl<'a, 'b>  GraphSuccessors<'b> for Mir<'a> {
     type Item = BasicBlock;
     type Iter = IntoIter<BasicBlock>;
 }
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Hash, Ord, PartialOrd)]
+pub struct Location {
+    /// the location is within this block
+    pub block: BasicBlock,
+
+    /// the location is the start of the this statement; or, if `statement_index`
+    /// == num-statements, then the start of the terminator.
+    pub statement_index: usize,
+}
+

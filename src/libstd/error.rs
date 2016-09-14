@@ -48,16 +48,14 @@
 // reconsider what crate these items belong in.
 
 use any::TypeId;
-use boxed::Box;
 use cell;
 use char;
 use fmt::{self, Debug, Display};
-use marker::{Send, Sync, Reflect};
+use marker::Reflect;
 use mem::transmute;
 use num;
-use raw::TraitObject;
 use str;
-use string::{self, String};
+use string;
 
 /// Base functionality for all errors in Rust.
 #[stable(feature = "rust1", since = "1.0.0")]
@@ -304,6 +302,13 @@ impl<'a, T: ?Sized + Reflect> Error for cell::BorrowMutError<'a, T> {
     }
 }
 
+#[unstable(feature = "try_from", issue = "33417")]
+impl Error for char::CharTryFromError {
+    fn description(&self) -> &str {
+        "converted integer out of range for `char`"
+    }
+}
+
 // copied from any.rs
 impl Error + 'static {
     /// Returns true if the boxed type is the same as `T`
@@ -327,11 +332,7 @@ impl Error + 'static {
     pub fn downcast_ref<T: Error + 'static>(&self) -> Option<&T> {
         if self.is::<T>() {
             unsafe {
-                // Get the raw representation of the trait object
-                let to: TraitObject = transmute(self);
-
-                // Extract the data pointer
-                Some(&*(to.data as *const T))
+                Some(&*(self as *const Error as *const T))
             }
         } else {
             None
@@ -345,11 +346,7 @@ impl Error + 'static {
     pub fn downcast_mut<T: Error + 'static>(&mut self) -> Option<&mut T> {
         if self.is::<T>() {
             unsafe {
-                // Get the raw representation of the trait object
-                let to: TraitObject = transmute(self);
-
-                // Extract the data pointer
-                Some(&mut *(to.data as *const T as *mut T))
+                Some(&mut *(self as *mut Error as *mut T))
             }
         } else {
             None
@@ -410,13 +407,8 @@ impl Error {
     pub fn downcast<T: Error + 'static>(self: Box<Self>) -> Result<Box<T>, Box<Error>> {
         if self.is::<T>() {
             unsafe {
-                // Get the raw representation of the trait object
-                let raw = Box::into_raw(self);
-                let to: TraitObject =
-                    transmute::<*mut Error, TraitObject>(raw);
-
-                // Extract the data pointer
-                Ok(Box::from_raw(to.data as *mut T))
+                let raw: *mut Error = Box::into_raw(self);
+                Ok(Box::from_raw(raw as *mut T))
             }
         } else {
             Err(self)
@@ -454,7 +446,6 @@ impl Error + Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use prelude::v1::*;
     use super::Error;
     use fmt;
 

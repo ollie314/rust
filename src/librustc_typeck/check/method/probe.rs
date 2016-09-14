@@ -20,10 +20,10 @@ use rustc::ty::subst::{Subst, Substs};
 use rustc::traits;
 use rustc::ty::{self, Ty, ToPolyTraitRef, TraitRef, TypeFoldable};
 use rustc::infer::{InferOk, TypeOrigin};
+use rustc::util::nodemap::FnvHashSet;
 use syntax::ast;
 use syntax_pos::{Span, DUMMY_SP};
 use rustc::hir;
-use std::collections::HashSet;
 use std::mem;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -40,7 +40,7 @@ struct ProbeContext<'a, 'gcx: 'a+'tcx, 'tcx: 'a> {
     opt_simplified_steps: Option<Vec<ty::fast_reject::SimplifiedType>>,
     inherent_candidates: Vec<Candidate<'tcx>>,
     extension_candidates: Vec<Candidate<'tcx>>,
-    impl_dups: HashSet<DefId>,
+    impl_dups: FnvHashSet<DefId>,
     import_id: Option<ast::NodeId>,
 
     /// Collects near misses when the candidate functions are missing a `self` keyword and is only
@@ -255,7 +255,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
             item_name: item_name,
             inherent_candidates: Vec::new(),
             extension_candidates: Vec::new(),
-            impl_dups: HashSet::new(),
+            impl_dups: FnvHashSet(),
             import_id: None,
             steps: Rc::new(steps),
             opt_simplified_steps: opt_simplified_steps,
@@ -292,8 +292,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
                 self.assemble_inherent_candidates_from_object(self_ty, data.principal);
                 self.assemble_inherent_impl_candidates_for_type(data.principal.def_id());
             }
-            ty::TyEnum(def, _) |
-            ty::TyStruct(def, _) => {
+            ty::TyAdt(def, _) => {
                 self.assemble_inherent_impl_candidates_for_type(def.did);
             }
             ty::TyBox(_) => {
@@ -496,7 +495,6 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
                     ty::Predicate::WellFormed(..) |
                     ty::Predicate::ObjectSafe(..) |
                     ty::Predicate::ClosureKind(..) |
-                    ty::Predicate::Rfc1592(..) |
                     ty::Predicate::TypeOutlives(..) => {
                         None
                     }
@@ -519,9 +517,9 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
                        trait_ref.substs,
                        m);
                 assert_eq!(m.generics.parent_types as usize,
-                           trait_ref.substs.types.len());
+                           trait_ref.substs.types().count());
                 assert_eq!(m.generics.parent_regions as usize,
-                           trait_ref.substs.regions.len());
+                           trait_ref.substs.regions().count());
             }
 
             // Because this trait derives from a where-clause, it
@@ -529,7 +527,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
             // artifacts. This means it is safe to put into the
             // `WhereClauseCandidate` and (eventually) into the
             // `WhereClausePick`.
-            assert!(!trait_ref.substs.types.needs_infer());
+            assert!(!trait_ref.substs.needs_infer());
 
             this.inherent_candidates.push(Candidate {
                 xform_self_ty: xform_self_ty,
@@ -574,7 +572,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
                                                          expr_id: ast::NodeId)
                                                          -> Result<(), MethodError<'tcx>>
     {
-        let mut duplicates = HashSet::new();
+        let mut duplicates = FnvHashSet();
         let opt_applicable_traits = self.tcx.trait_map.get(&expr_id);
         if let Some(applicable_traits) = opt_applicable_traits {
             for trait_candidate in applicable_traits {
@@ -591,7 +589,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
     }
 
     fn assemble_extension_candidates_for_all_traits(&mut self) -> Result<(), MethodError<'tcx>> {
-        let mut duplicates = HashSet::new();
+        let mut duplicates = FnvHashSet();
         for trait_info in suggest::all_traits(self.ccx) {
             if duplicates.insert(trait_info.def_id) {
                 self.assemble_extension_candidates_for_trait(trait_info.def_id)?;
@@ -1220,8 +1218,8 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
         // are given do not include type/lifetime parameters for the
         // method yet. So create fresh variables here for those too,
         // if there are any.
-        assert_eq!(substs.types.len(), method.generics.parent_types as usize);
-        assert_eq!(substs.regions.len(), method.generics.parent_regions as usize);
+        assert_eq!(substs.types().count(), method.generics.parent_types as usize);
+        assert_eq!(substs.regions().count(), method.generics.parent_regions as usize);
 
         if self.mode == Mode::Path {
             return impl_ty;
@@ -1236,16 +1234,18 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
             xform_self_ty.subst(self.tcx, substs)
         } else {
             let substs = Substs::for_item(self.tcx, method.def_id, |def, _| {
-                if let Some(&r) = substs.regions.get(def.index as usize) {
-                    r
+                let i = def.index as usize;
+                if i < substs.params().len() {
+                    substs.region_at(i)
                 } else {
                     // In general, during probe we erase regions. See
                     // `impl_self_ty()` for an explanation.
-                    ty::ReErased
+                    self.tcx.mk_region(ty::ReErased)
                 }
             }, |def, cur_substs| {
-                if let Some(&ty) = substs.types.get(def.index as usize) {
-                    ty
+                let i = def.index as usize;
+                if i < substs.params().len() {
+                    substs.type_at(i)
                 } else {
                     self.type_var_for_def(self.span, def, cur_substs)
                 }
@@ -1262,7 +1262,7 @@ impl<'a, 'gcx, 'tcx> ProbeContext<'a, 'gcx, 'tcx> {
         let impl_ty = self.tcx.lookup_item_type(impl_def_id).ty;
 
         let substs = Substs::for_item(self.tcx, impl_def_id,
-                                      |_, _| ty::ReErased,
+                                      |_, _| self.tcx.mk_region(ty::ReErased),
                                       |_, _| self.next_ty_var());
 
         (impl_ty, substs)
@@ -1312,8 +1312,8 @@ impl<'tcx> Candidate<'tcx> {
         Pick {
             item: self.item.clone(),
             kind: match self.kind {
-                InherentImplCandidate(_, _) => InherentImplPick,
-                ExtensionImplCandidate(def_id, _, _) => {
+                InherentImplCandidate(..) => InherentImplPick,
+                ExtensionImplCandidate(def_id, ..) => {
                     ExtensionImplPick(def_id)
                 }
                 ObjectCandidate => ObjectPick,
@@ -1324,7 +1324,7 @@ impl<'tcx> Candidate<'tcx> {
                     // inference variables or other artifacts. This
                     // means they are safe to put into the
                     // `WhereClausePick`.
-                    assert!(!trait_ref.substs().types.needs_infer());
+                    assert!(!trait_ref.substs().needs_infer());
 
                     WhereClausePick(trait_ref.clone())
                 }
@@ -1338,10 +1338,10 @@ impl<'tcx> Candidate<'tcx> {
 
     fn to_source(&self) -> CandidateSource {
         match self.kind {
-            InherentImplCandidate(_, _) => {
+            InherentImplCandidate(..) => {
                 ImplSource(self.item.container().id())
             }
-            ExtensionImplCandidate(def_id, _, _) => ImplSource(def_id),
+            ExtensionImplCandidate(def_id, ..) => ImplSource(def_id),
             ObjectCandidate |
             TraitCandidate |
             WhereClauseCandidate(_) => TraitSource(self.item.container().id()),

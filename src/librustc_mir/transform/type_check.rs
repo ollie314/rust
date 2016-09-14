@@ -68,17 +68,20 @@ impl<'a, 'b, 'gcx, 'tcx> Visitor<'tcx> for TypeVerifier<'a, 'b, 'gcx, 'tcx> {
         }
     }
 
-    fn visit_lvalue(&mut self, lvalue: &Lvalue<'tcx>, _context: visit::LvalueContext) {
-        self.sanitize_lvalue(lvalue);
+    fn visit_lvalue(&mut self,
+                    lvalue: &Lvalue<'tcx>,
+                    _context: visit::LvalueContext,
+                    location: Location) {
+        self.sanitize_lvalue(lvalue, location);
     }
 
-    fn visit_constant(&mut self, constant: &Constant<'tcx>) {
-        self.super_constant(constant);
+    fn visit_constant(&mut self, constant: &Constant<'tcx>, location: Location) {
+        self.super_constant(constant, location);
         self.sanitize_type(constant, constant.ty);
     }
 
-    fn visit_rvalue(&mut self, rvalue: &Rvalue<'tcx>) {
-        self.super_rvalue(rvalue);
+    fn visit_rvalue(&mut self, rvalue: &Rvalue<'tcx>, location: Location) {
+        self.super_rvalue(rvalue, location);
         if let Some(ty) = rvalue.ty(self.mir, self.tcx()) {
             self.sanitize_type(rvalue, ty);
         }
@@ -124,7 +127,7 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
         }
     }
 
-    fn sanitize_lvalue(&mut self, lvalue: &Lvalue<'tcx>) -> LvalueTy<'tcx> {
+    fn sanitize_lvalue(&mut self, lvalue: &Lvalue<'tcx>, location: Location) -> LvalueTy<'tcx> {
         debug!("sanitize_lvalue: {:?}", lvalue);
         match *lvalue {
             Lvalue::Var(index) => LvalueTy::Ty { ty: self.mir.var_decls[index].ty },
@@ -136,14 +139,14 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
                 LvalueTy::Ty { ty: self.mir.return_ty }
             }
             Lvalue::Projection(ref proj) => {
-                let base_ty = self.sanitize_lvalue(&proj.base);
+                let base_ty = self.sanitize_lvalue(&proj.base, location);
                 if let LvalueTy::Ty { ty } = base_ty {
                     if ty.references_error() {
                         assert!(self.errors_reported);
                         return LvalueTy::Ty { ty: self.tcx().types.err };
                     }
                 }
-                self.sanitize_projection(base_ty, &proj.elem, lvalue)
+                self.sanitize_projection(base_ty, &proj.elem, lvalue, location)
             }
         }
     }
@@ -151,7 +154,8 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
     fn sanitize_projection(&mut self,
                            base: LvalueTy<'tcx>,
                            pi: &LvalueElem<'tcx>,
-                           lvalue: &Lvalue<'tcx>)
+                           lvalue: &Lvalue<'tcx>,
+                           location: Location)
                            -> LvalueTy<'tcx> {
         debug!("sanitize_projection: {:?} {:?} {:?}", base, pi, lvalue);
         let tcx = self.tcx();
@@ -168,7 +172,7 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
                 }
             }
             ProjectionElem::Index(ref i) => {
-                self.visit_operand(i);
+                self.visit_operand(i, location);
                 let index_ty = i.ty(self.mir, tcx);
                 if index_ty != tcx.types.usize {
                     LvalueTy::Ty {
@@ -214,7 +218,7 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
             }
             ProjectionElem::Downcast(adt_def1, index) =>
                 match base_ty.sty {
-                    ty::TyEnum(adt_def, substs) if adt_def == adt_def1 => {
+                    ty::TyAdt(adt_def, substs) if adt_def.is_enum() && adt_def == adt_def1 => {
                         if index >= adt_def.variants.len() {
                             LvalueTy::Ty {
                                 ty: span_mirbug_and_err!(
@@ -277,8 +281,7 @@ impl<'a, 'b, 'gcx, 'tcx> TypeVerifier<'a, 'b, 'gcx, 'tcx> {
                 (&adt_def.variants[variant_index], substs)
             }
             LvalueTy::Ty { ty } => match ty.sty {
-                ty::TyStruct(adt_def, substs) | ty::TyEnum(adt_def, substs)
-                    if adt_def.is_univariant() => {
+                ty::TyAdt(adt_def, substs) if adt_def.is_univariant() => {
                         (&adt_def.variants[0], substs)
                     }
                 ty::TyTuple(tys) | ty::TyClosure(_, ty::ClosureSubsts {
@@ -358,7 +361,7 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
             StatementKind::SetDiscriminant{ ref lvalue, variant_index } => {
                 let lvalue_type = lvalue.ty(mir, tcx).to_ty(tcx);
                 let adt = match lvalue_type.sty {
-                    TypeVariants::TyEnum(adt, _) => adt,
+                    TypeVariants::TyAdt(adt, _) if adt.is_enum() => adt,
                     _ => {
                         span_bug!(stmt.source_info.span,
                                   "bad set discriminant ({:?} = {:?}): lhs is not an enum",
@@ -438,9 +441,10 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
             TerminatorKind::Switch { ref discr, adt_def, ref targets } => {
                 let discr_ty = discr.ty(mir, tcx).to_ty(tcx);
                 match discr_ty.sty {
-                    ty::TyEnum(def, _)
-                        if def == adt_def && adt_def.variants.len() == targets.len()
-                        => {},
+                    ty::TyAdt(def, _) if def.is_enum() &&
+                                         def == adt_def &&
+                                         adt_def.variants.len() == targets.len()
+                      => {},
                     _ => {
                         span_mirbug!(self, term, "bad Switch ({:?} on {:?})",
                                      adt_def, discr_ty);
@@ -451,7 +455,7 @@ impl<'a, 'gcx, 'tcx> TypeChecker<'a, 'gcx, 'tcx> {
                 let func_ty = func.ty(mir, tcx);
                 debug!("check_terminator: call, func_ty={:?}", func_ty);
                 let func_ty = match func_ty.sty {
-                    ty::TyFnDef(_, _, func_ty) | ty::TyFnPtr(func_ty) => func_ty,
+                    ty::TyFnDef(.., func_ty) | ty::TyFnPtr(func_ty) => func_ty,
                     _ => {
                         span_mirbug!(self, term, "call to non-function {:?}", func_ty);
                         return;

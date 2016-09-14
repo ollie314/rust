@@ -213,6 +213,45 @@ impl RegionScope for ElidableRscope {
     }
 }
 
+/// A scope that behaves as an ElidabeRscope with a `'static` default region
+/// that should also warn if the `static_in_const` feature is unset.
+#[derive(Copy, Clone)]
+pub struct StaticRscope<'a, 'gcx: 'a + 'tcx, 'tcx: 'a> {
+    tcx: &'a ty::TyCtxt<'a, 'gcx, 'tcx>,
+}
+
+impl<'a, 'gcx: 'a + 'tcx, 'tcx: 'a> StaticRscope<'a, 'gcx, 'tcx> {
+    /// create a new StaticRscope from a reference to the `TyCtxt`
+    pub fn new(tcx: &'a ty::TyCtxt<'a, 'gcx, 'tcx>) -> Self {
+        StaticRscope { tcx: tcx }
+    }
+}
+
+impl<'a, 'gcx: 'a + 'tcx, 'tcx: 'a> RegionScope for StaticRscope<'a, 'gcx, 'tcx> {
+    fn anon_regions(&self,
+                    span: Span,
+                    count: usize)
+                    -> Result<Vec<ty::Region>, Option<Vec<ElisionFailureInfo>>> {
+        if !self.tcx.sess.features.borrow().static_in_const {
+            self.tcx
+                .sess
+                .struct_span_err(span,
+                                 "this needs a `'static` lifetime or the \
+                                 `static_in_const` feature, see #35897")
+                .emit();
+        }
+        Ok(vec![ty::ReStatic; count])
+    }
+
+    fn object_lifetime_default(&self, span: Span) -> Option<ty::Region> {
+        Some(self.base_object_lifetime_default(span))
+    }
+
+    fn base_object_lifetime_default(&self, _span: Span) -> ty::Region {
+        ty::ReStatic
+    }
+}
+
 /// A scope in which we generate anonymous, late-bound regions for
 /// omitted regions. This occurs in function signatures.
 pub struct BindingRscope {
@@ -257,12 +296,12 @@ impl RegionScope for BindingRscope {
 /// A scope which overrides the default object lifetime but has no other effect.
 pub struct ObjectLifetimeDefaultRscope<'r> {
     base_scope: &'r (RegionScope+'r),
-    default: ty::ObjectLifetimeDefault,
+    default: ty::ObjectLifetimeDefault<'r>,
 }
 
 impl<'r> ObjectLifetimeDefaultRscope<'r> {
     pub fn new(base_scope: &'r (RegionScope+'r),
-               default: ty::ObjectLifetimeDefault)
+               default: ty::ObjectLifetimeDefault<'r>)
                -> ObjectLifetimeDefaultRscope<'r>
     {
         ObjectLifetimeDefaultRscope {
@@ -283,7 +322,7 @@ impl<'r> RegionScope for ObjectLifetimeDefaultRscope<'r> {
                 Some(self.base_object_lifetime_default(span)),
 
             ty::ObjectLifetimeDefault::Specific(r) =>
-                Some(r),
+                Some(*r),
         }
     }
 

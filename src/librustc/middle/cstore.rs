@@ -96,8 +96,7 @@ pub enum DefLike {
 pub enum InlinedItem {
     Item(DefId /* def-id in source crate */, P<hir::Item>),
     TraitItem(DefId /* impl id */, P<hir::TraitItem>),
-    ImplItem(DefId /* impl id */, P<hir::ImplItem>),
-    Foreign(DefId /* extern item */, P<hir::ForeignItem>),
+    ImplItem(DefId /* impl id */, P<hir::ImplItem>)
 }
 
 /// A borrowed version of `hir::InlinedItem`.
@@ -105,8 +104,7 @@ pub enum InlinedItem {
 pub enum InlinedItemRef<'a> {
     Item(DefId, &'a hir::Item),
     TraitItem(DefId, &'a hir::TraitItem),
-    ImplItem(DefId, &'a hir::ImplItem),
-    Foreign(DefId, &'a hir::ForeignItem)
+    ImplItem(DefId, &'a hir::ImplItem)
 }
 
 /// Item definitions in the currently-compiled crate would have the CrateNum
@@ -151,7 +149,7 @@ pub trait CrateStore<'tcx> {
     fn closure_kind(&self, def_id: DefId) -> ty::ClosureKind;
     fn closure_ty<'a>(&self, tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId)
                       -> ty::ClosureTy<'tcx>;
-    fn item_variances(&self, def: DefId) -> ty::ItemVariances;
+    fn item_variances(&self, def: DefId) -> Vec<ty::Variance>;
     fn repr_attrs(&self, def: DefId) -> Vec<attr::ReprAttr>;
     fn item_type<'a>(&self, tcx: TyCtxt<'a, 'tcx, 'tcx>, def: DefId)
                      -> Ty<'tcx>;
@@ -200,7 +198,6 @@ pub trait CrateStore<'tcx> {
     fn is_default_impl(&self, impl_did: DefId) -> bool;
     fn is_extern_item<'a>(&self, tcx: TyCtxt<'a, 'tcx, 'tcx>, did: DefId) -> bool;
     fn is_foreign_item(&self, did: DefId) -> bool;
-    fn is_static_method(&self, did: DefId) -> bool;
     fn is_statically_included_foreign_item(&self, id: ast::NodeId) -> bool;
     fn is_typedef(&self, did: DefId) -> bool;
 
@@ -213,6 +210,7 @@ pub trait CrateStore<'tcx> {
     fn is_explicitly_linked(&self, cnum: ast::CrateNum) -> bool;
     fn is_allocator(&self, cnum: ast::CrateNum) -> bool;
     fn is_panic_runtime(&self, cnum: ast::CrateNum) -> bool;
+    fn is_compiler_builtins(&self, cnum: ast::CrateNum) -> bool;
     fn panic_strategy(&self, cnum: ast::CrateNum) -> PanicStrategy;
     fn extern_crate(&self, cnum: ast::CrateNum) -> Option<ExternCrate>;
     fn crate_attrs(&self, cnum: ast::CrateNum) -> Vec<ast::Attribute>;
@@ -236,7 +234,7 @@ pub trait CrateStore<'tcx> {
                              def: DefKey)
                              -> Option<DefIndex>;
     fn def_key(&self, def: DefId) -> hir_map::DefKey;
-    fn relative_def_path(&self, def: DefId) -> hir_map::DefPath;
+    fn relative_def_path(&self, def: DefId) -> Option<hir_map::DefPath>;
     fn variant_kind(&self, def_id: DefId) -> Option<VariantKind>;
     fn struct_ctor_def_id(&self, struct_def_id: DefId) -> Option<DefId>;
     fn tuple_struct_definition_if_ctor(&self, did: DefId) -> Option<DefId>;
@@ -286,7 +284,6 @@ impl InlinedItem {
     {
         match *self {
             InlinedItem::Item(_, ref i) => visitor.visit_item(&i),
-            InlinedItem::Foreign(_, ref i) => visitor.visit_foreign_item(&i),
             InlinedItem::TraitItem(_, ref ti) => visitor.visit_trait_item(ti),
             InlinedItem::ImplItem(_, ref ii) => visitor.visit_impl_item(ii),
         }
@@ -332,7 +329,7 @@ impl<'tcx> CrateStore<'tcx> for DummyCrateStore {
     fn closure_kind(&self, def_id: DefId) -> ty::ClosureKind  { bug!("closure_kind") }
     fn closure_ty<'a>(&self, tcx: TyCtxt<'a, 'tcx, 'tcx>, def_id: DefId)
                       -> ty::ClosureTy<'tcx>  { bug!("closure_ty") }
-    fn item_variances(&self, def: DefId) -> ty::ItemVariances { bug!("item_variances") }
+    fn item_variances(&self, def: DefId) -> Vec<ty::Variance> { bug!("item_variances") }
     fn repr_attrs(&self, def: DefId) -> Vec<attr::ReprAttr> { bug!("repr_attrs") }
     fn item_type<'a>(&self, tcx: TyCtxt<'a, 'tcx, 'tcx>, def: DefId)
                      -> Ty<'tcx> { bug!("item_type") }
@@ -394,7 +391,6 @@ impl<'tcx> CrateStore<'tcx> for DummyCrateStore {
     fn is_extern_item<'a>(&self, tcx: TyCtxt<'a, 'tcx, 'tcx>, did: DefId) -> bool
         { bug!("is_extern_item") }
     fn is_foreign_item(&self, did: DefId) -> bool { bug!("is_foreign_item") }
-    fn is_static_method(&self, did: DefId) -> bool { bug!("is_static_method") }
     fn is_statically_included_foreign_item(&self, id: ast::NodeId) -> bool { false }
     fn is_typedef(&self, did: DefId) -> bool { bug!("is_typedef") }
 
@@ -410,6 +406,7 @@ impl<'tcx> CrateStore<'tcx> for DummyCrateStore {
     fn is_explicitly_linked(&self, cnum: ast::CrateNum) -> bool { bug!("is_explicitly_linked") }
     fn is_allocator(&self, cnum: ast::CrateNum) -> bool { bug!("is_allocator") }
     fn is_panic_runtime(&self, cnum: ast::CrateNum) -> bool { bug!("is_panic_runtime") }
+    fn is_compiler_builtins(&self, cnum: ast::CrateNum) -> bool { bug!("is_compiler_builtins") }
     fn panic_strategy(&self, cnum: ast::CrateNum) -> PanicStrategy {
         bug!("panic_strategy")
     }
@@ -435,7 +432,9 @@ impl<'tcx> CrateStore<'tcx> for DummyCrateStore {
 
     // resolve
     fn def_key(&self, def: DefId) -> hir_map::DefKey { bug!("def_key") }
-    fn relative_def_path(&self, def: DefId) -> hir_map::DefPath { bug!("relative_def_path") }
+    fn relative_def_path(&self, def: DefId) -> Option<hir_map::DefPath> {
+        bug!("relative_def_path")
+    }
     fn variant_kind(&self, def_id: DefId) -> Option<VariantKind> { bug!("variant_kind") }
     fn struct_ctor_def_id(&self, struct_def_id: DefId) -> Option<DefId>
         { bug!("struct_ctor_def_id") }

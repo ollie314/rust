@@ -26,7 +26,6 @@ use rustc::hir::intravisit::Visitor;
 
 use super::terms::*;
 use super::terms::VarianceTerm::*;
-use super::terms::ParamKind::*;
 use super::xform::*;
 
 pub struct ConstraintContext<'a, 'tcx: 'a> {
@@ -81,7 +80,7 @@ impl<'a, 'tcx, 'v> Visitor<'v> for ConstraintContext<'a, 'tcx> {
         debug!("visit_item item={}", tcx.map.node_to_string(item.id));
 
         match item.node {
-            hir::ItemEnum(..) | hir::ItemStruct(..) => {
+            hir::ItemEnum(..) | hir::ItemStruct(..) | hir::ItemUnion(..) => {
                 let scheme = tcx.lookup_item_type(did);
 
                 // Not entirely obvious: constraints on structs/enums do not
@@ -186,6 +185,7 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
                         hir::ItemTy(..) |
                         hir::ItemEnum(..) |
                         hir::ItemStruct(..) |
+                        hir::ItemUnion(..) |
                         hir::ItemTrait(..)   => is_inferred = true,
                         hir::ItemFn(..)      => is_inferred = false,
                         _                    => cannot_happen!(),
@@ -209,7 +209,6 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
     fn declared_variance(&self,
                          param_def_id: DefId,
                          item_def_id: DefId,
-                         kind: ParamKind,
                          index: usize)
                          -> VarianceTermPtr<'a> {
         assert_eq!(param_def_id.krate, item_def_id.krate);
@@ -224,11 +223,7 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
             // Parameter on an item defined within another crate:
             // variance already inferred, just look it up.
             let variances = self.tcx().item_variances(item_def_id);
-            let variance = match kind {
-                TypeParam => variances.types[index],
-                RegionParam => variances.regions[index],
-            };
-            self.constant_term(variance)
+            self.constant_term(variances[index])
         }
     }
 
@@ -330,7 +325,7 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
 
             ty::TyRef(region, ref mt) => {
                 let contra = self.contravariant(variance);
-                self.add_constraints_from_region(generics, *region, contra);
+                self.add_constraints_from_region(generics, region, contra);
                 self.add_constraints_from_mt(generics, mt, variance);
             }
 
@@ -349,8 +344,7 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
                 }
             }
 
-            ty::TyEnum(def, substs) |
-            ty::TyStruct(def, substs) => {
+            ty::TyAdt(def, substs) => {
                 let item_type = self.tcx().lookup_item_type(def.did);
 
                 // This edge is actually implied by the call to
@@ -401,8 +395,11 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
 
             ty::TyParam(ref data) => {
                 assert_eq!(generics.parent, None);
-                assert!((data.idx as usize) < generics.types.len());
-                let def_id = generics.types[data.idx as usize].def_id;
+                let mut i = data.idx as usize;
+                if !generics.has_self || i > 0 {
+                    i -= generics.regions.len();
+                }
+                let def_id = generics.types[i].def_id;
                 let node_id = self.tcx().map.as_local_node_id(def_id).unwrap();
                 match self.terms_cx.inferred_map.get(&node_id) {
                     Some(&index) => {
@@ -416,7 +413,7 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
                 }
             }
 
-            ty::TyFnDef(_, _, &ty::BareFnTy { ref sig, .. }) |
+            ty::TyFnDef(.., &ty::BareFnTy { ref sig, .. }) |
             ty::TyFnPtr(&ty::BareFnTy { ref sig, .. }) => {
                 self.add_constraints_from_sig(generics, sig, variance);
             }
@@ -449,7 +446,7 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
 
         for p in type_param_defs {
             let variance_decl =
-                self.declared_variance(p.def_id, def_id, TypeParam, p.index as usize);
+                self.declared_variance(p.def_id, def_id, p.index as usize);
             let variance_i = self.xform(variance, variance_decl);
             let substs_ty = substs.type_for_def(p);
             debug!("add_constraints_from_substs: variance_decl={:?} variance_i={:?}",
@@ -459,7 +456,7 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
 
         for p in region_param_defs {
             let variance_decl =
-                self.declared_variance(p.def_id, def_id, RegionParam, p.index as usize);
+                self.declared_variance(p.def_id, def_id, p.index as usize);
             let variance_i = self.xform(variance, variance_decl);
             let substs_r = substs.region_for_def(p);
             self.add_constraints_from_region(generics, substs_r, variance_i);
@@ -483,13 +480,13 @@ impl<'a, 'tcx> ConstraintContext<'a, 'tcx> {
     /// context with ambient variance `variance`
     fn add_constraints_from_region(&mut self,
                                    generics: &ty::Generics<'tcx>,
-                                   region: ty::Region,
+                                   region: &'tcx ty::Region,
                                    variance: VarianceTermPtr<'a>) {
-        match region {
+        match *region {
             ty::ReEarlyBound(ref data) => {
                 assert_eq!(generics.parent, None);
-                assert!((data.index as usize) < generics.regions.len());
-                let def_id = generics.regions[data.index as usize].def_id;
+                let i = data.index as usize - generics.has_self as usize;
+                let def_id = generics.regions[i].def_id;
                 let node_id = self.tcx().map.as_local_node_id(def_id).unwrap();
                 if self.is_to_be_inferred(node_id) {
                     let index = self.inferred_index(node_id);

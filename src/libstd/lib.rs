@@ -175,7 +175,7 @@
 //! [`atomic`]: sync/atomic/index.html
 //! [`collections`]: collections/index.html
 //! [`for`]: ../book/loops.html#for
-//! [`format!`]: macro.format!.html
+//! [`format!`]: macro.format.html
 //! [`fs`]: fs/index.html
 //! [`io`]: io/index.html
 //! [`iter`]: iter/index.html
@@ -224,14 +224,17 @@
 #![feature(char_internals)]
 #![feature(collections)]
 #![feature(collections_bound)]
+#![feature(compiler_builtins_lib)]
 #![feature(const_fn)]
 #![feature(core_float)]
 #![feature(core_intrinsics)]
+#![feature(dotdot_in_tuple_patterns)]
 #![feature(dropck_parametricity)]
 #![feature(float_extras)]
 #![feature(float_from_str_radix)]
 #![feature(fn_traits)]
 #![feature(fnbox)]
+#![feature(fused)]
 #![feature(hashmap_hasher)]
 #![feature(heap_api)]
 #![feature(inclusive_range)]
@@ -251,6 +254,7 @@
 #![feature(optin_builtin_traits)]
 #![feature(panic_unwind)]
 #![feature(placement_in_syntax)]
+#![feature(prelude_import)]
 #![feature(question_mark)]
 #![feature(rand)]
 #![feature(raw)]
@@ -274,7 +278,7 @@
 #![feature(unboxed_closures)]
 #![feature(unicode)]
 #![feature(unique)]
-#![feature(unsafe_no_drop_flag, filling_drop)]
+#![cfg_attr(stage0, feature(unsafe_no_drop_flag))]
 #![feature(unwind_attributes)]
 #![feature(vec_push_all)]
 #![feature(zero_one)]
@@ -290,6 +294,10 @@
 #![deny(missing_docs)]
 #![allow(unused_features)] // std may use features in a platform-specific way
 #![cfg_attr(not(stage0), deny(warnings))]
+
+#[prelude_import]
+#[allow(unused)]
+use prelude::v1::*;
 
 #[cfg(test)] extern crate test;
 
@@ -314,6 +322,9 @@ extern crate unwind;
 
 #[cfg(stage0)]
 extern crate alloc_system;
+
+// compiler-rt intrinsics
+extern crate compiler_builtins;
 
 // Make std testable by not duplicating lang items and other globals. See #2912
 #[cfg(test)] extern crate std as realstd;

@@ -90,11 +90,11 @@ use std::rc::Rc;
 
 #[derive(Clone, PartialEq)]
 pub enum Categorization<'tcx> {
-    Rvalue(ty::Region),                    // temporary val, argument is its scope
+    Rvalue(&'tcx ty::Region),                    // temporary val, argument is its scope
     StaticItem,
     Upvar(Upvar),                          // upvar referenced by closure env
     Local(ast::NodeId),                    // local variable
-    Deref(cmt<'tcx>, usize, PointerKind),  // deref of a ptr
+    Deref(cmt<'tcx>, usize, PointerKind<'tcx>),  // deref of a ptr
     Interior(cmt<'tcx>, InteriorKind),     // something interior: field, tuple, etc
     Downcast(cmt<'tcx>, DefId),            // selects a particular enum variant (*1)
 
@@ -110,18 +110,18 @@ pub struct Upvar {
 
 // different kinds of pointers:
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PointerKind {
+pub enum PointerKind<'tcx> {
     /// `Box<T>`
     Unique,
 
     /// `&T`
-    BorrowedPtr(ty::BorrowKind, ty::Region),
+    BorrowedPtr(ty::BorrowKind, &'tcx ty::Region),
 
     /// `*T`
     UnsafePtr(hir::Mutability),
 
     /// Implicit deref of the `&T` that results from an overloaded index `[]`.
-    Implicit(ty::BorrowKind, ty::Region),
+    Implicit(ty::BorrowKind, &'tcx ty::Region),
 }
 
 // We use the term "interior" to mean "something reachable from the
@@ -198,8 +198,8 @@ pub type cmt<'tcx> = Rc<cmt_<'tcx>>;
 // We pun on *T to mean both actual deref of a ptr as well
 // as accessing of components:
 #[derive(Copy, Clone)]
-pub enum deref_kind {
-    deref_ptr(PointerKind),
+pub enum deref_kind<'tcx> {
+    deref_ptr(PointerKind<'tcx>),
     deref_interior(InteriorKind),
 }
 
@@ -216,19 +216,18 @@ fn deref_kind(t: Ty, context: DerefKindContext) -> McResult<deref_kind> {
 
         ty::TyRef(r, mt) => {
             let kind = ty::BorrowKind::from_mutbl(mt.mutbl);
-            Ok(deref_ptr(BorrowedPtr(kind, *r)))
+            Ok(deref_ptr(BorrowedPtr(kind, r)))
         }
 
         ty::TyRawPtr(ref mt) => {
             Ok(deref_ptr(UnsafePtr(mt.mutbl)))
         }
 
-        ty::TyEnum(..) |
-        ty::TyStruct(..) => { // newtype
+        ty::TyAdt(..) => { // newtype
             Ok(deref_interior(InteriorField(PositionalField(0))))
         }
 
-        ty::TyArray(_, _) | ty::TySlice(_) => {
+        ty::TyArray(..) | ty::TySlice(_) => {
             // no deref of indexed content without supplying InteriorOffsetKind
             if let Some(context) = context {
                 Ok(deref_interior(InteriorElement(context, ElementKind::VecElement)))
@@ -318,7 +317,7 @@ impl MutabilityCategory {
     fn from_local(tcx: TyCtxt, id: ast::NodeId) -> MutabilityCategory {
         let ret = match tcx.map.get(id) {
             ast_map::NodeLocal(p) => match p.node {
-                PatKind::Binding(bind_mode, _, _) => {
+                PatKind::Binding(bind_mode, ..) => {
                     if bind_mode == hir::BindByValue(hir::MutMutable) {
                         McDeclared
                     } else {
@@ -419,7 +418,7 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
         // *being borrowed* is.  But ideally we would put in a more
         // fundamental fix to this conflated use of the node id.
         let ret_ty = match pat.node {
-            PatKind::Binding(hir::BindByRef(_), _, _) => {
+            PatKind::Binding(hir::BindByRef(_), ..) => {
                 // a bind-by-ref means that the base_ty will be the type of the ident itself,
                 // but what we want here is the type of the underlying value being borrowed.
                 // So peel off one-level, turning the &T into T.
@@ -572,7 +571,7 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
                id, expr_ty, def);
 
         match def {
-          Def::Struct(..) | Def::Variant(..) | Def::Const(..) |
+          Def::Struct(..) | Def::Union(..) | Def::Variant(..) | Def::Const(..) |
           Def::AssociatedConst(..) | Def::Fn(..) | Def::Method(..) => {
                 Ok(self.cat_rvalue_node(id, span, expr_ty))
           }
@@ -761,19 +760,19 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
             };
 
             match fn_expr.node {
-                hir::ExprClosure(_, _, ref body, _) => body.id,
+                hir::ExprClosure(.., ref body, _) => body.id,
                 _ => bug!()
             }
         };
 
         // Region of environment pointer
-        let env_region = ty::ReFree(ty::FreeRegion {
+        let env_region = self.tcx().mk_region(ty::ReFree(ty::FreeRegion {
             // The environment of a closure is guaranteed to
             // outlive any bindings introduced in the body of the
             // closure itself.
             scope: self.tcx().region_maps.item_extent(fn_body_id),
             bound_region: ty::BrEnv
-        });
+        }));
 
         let env_ptr = BorrowedPtr(env_borrow_kind, env_region);
 
@@ -817,11 +816,11 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
 
     /// Returns the lifetime of a temporary created by expr with id `id`.
     /// This could be `'static` if `id` is part of a constant expression.
-    pub fn temporary_scope(&self, id: ast::NodeId) -> ty::Region {
-        match self.infcx.temporary_scope(id) {
+    pub fn temporary_scope(&self, id: ast::NodeId) -> &'tcx ty::Region {
+        self.tcx().mk_region(match self.infcx.temporary_scope(id) {
             Some(scope) => ty::ReScope(scope),
             None => ty::ReStatic
-        }
+        })
     }
 
     pub fn cat_rvalue_node(&self,
@@ -845,7 +844,7 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
         let re = if qualif.intersects(ConstQualif::NON_STATIC_BORROWS) {
             self.temporary_scope(id)
         } else {
-            ty::ReStatic
+            self.tcx().mk_region(ty::ReStatic)
         };
         let ret = self.cat_rvalue(id, span, re, expr_ty);
         debug!("cat_rvalue_node ret {:?}", ret);
@@ -855,7 +854,7 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
     pub fn cat_rvalue(&self,
                       cmt_id: ast::NodeId,
                       span: Span,
-                      temp_scope: ty::Region,
+                      temp_scope: &'tcx ty::Region,
                       expr_ty: Ty<'tcx>) -> cmt<'tcx> {
         let ret = Rc::new(cmt_ {
             id:cmt_id,
@@ -1154,7 +1153,7 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
                 }
                 Def::Struct(..) => {
                     match self.pat_ty(&pat)?.sty {
-                        ty::TyStruct(adt_def, _) => {
+                        ty::TyAdt(adt_def, _) => {
                             adt_def.struct_variant().fields.len()
                         }
                         ref ty => {
@@ -1185,7 +1184,7 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
             }
           }
 
-          PatKind::Binding(_, _, Some(ref subpat)) => {
+          PatKind::Binding(.., Some(ref subpat)) => {
               self.cat_pattern_(cmt, &subpat, op)?;
           }
 
@@ -1225,7 +1224,7 @@ impl<'a, 'gcx, 'tcx> MemCategorizationContext<'a, 'gcx, 'tcx> {
             }
           }
 
-          PatKind::Path(..) | PatKind::Binding(_, _, None) |
+          PatKind::Path(..) | PatKind::Binding(.., None) |
           PatKind::Lit(..) | PatKind::Range(..) | PatKind::Wild => {
             // always ok
           }
@@ -1275,9 +1274,9 @@ impl<'tcx> cmt_<'tcx> {
             Categorization::Rvalue(..) |
             Categorization::StaticItem |
             Categorization::Local(..) |
-            Categorization::Deref(_, _, UnsafePtr(..)) |
-            Categorization::Deref(_, _, BorrowedPtr(..)) |
-            Categorization::Deref(_, _, Implicit(..)) |
+            Categorization::Deref(.., UnsafePtr(..)) |
+            Categorization::Deref(.., BorrowedPtr(..)) |
+            Categorization::Deref(.., Implicit(..)) |
             Categorization::Upvar(..) => {
                 Rc::new((*self).clone())
             }
@@ -1320,7 +1319,7 @@ impl<'tcx> cmt_<'tcx> {
             Categorization::Rvalue(..) |
             Categorization::Local(..) |
             Categorization::Upvar(..) |
-            Categorization::Deref(_, _, UnsafePtr(..)) => { // yes, it's aliasable, but...
+            Categorization::Deref(.., UnsafePtr(..)) => { // yes, it's aliasable, but...
                 NonAliasable
             }
 
@@ -1349,9 +1348,9 @@ impl<'tcx> cmt_<'tcx> {
         match self.note {
             NoteClosureEnv(..) | NoteUpvarRef(..) => {
                 Some(match self.cat {
-                    Categorization::Deref(ref inner, _, _) => {
+                    Categorization::Deref(ref inner, ..) => {
                         match inner.cat {
-                            Categorization::Deref(ref inner, _, _) => inner.clone(),
+                            Categorization::Deref(ref inner, ..) => inner.clone(),
                             Categorization::Upvar(..) => inner.clone(),
                             _ => bug!()
                         }
@@ -1379,7 +1378,7 @@ impl<'tcx> cmt_<'tcx> {
                     "local variable".to_string()
                 }
             }
-            Categorization::Deref(_, _, pk) => {
+            Categorization::Deref(.., pk) => {
                 let upvar = self.upvar();
                 match upvar.as_ref().map(|i| &i.cat) {
                     Some(&Categorization::Upvar(ref var)) => {
@@ -1480,7 +1479,7 @@ pub fn ptr_sigil(ptr: PointerKind) -> &'static str {
     }
 }
 
-impl fmt::Debug for PointerKind {
+impl<'tcx> fmt::Debug for PointerKind<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Unique => write!(f, "Box"),

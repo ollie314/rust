@@ -35,13 +35,23 @@ pub fn std<'a>(build: &'a Build, target: &str, compiler: &Compiler<'a>) {
     println!("Building stage{} std artifacts ({} -> {})", compiler.stage,
              compiler.host, target);
 
-    // Move compiler-rt into place as it'll be required by the compiler when
-    // building the standard library to link the dylib of libstd
     let libdir = build.sysroot_libdir(compiler, target);
     let _ = fs::remove_dir_all(&libdir);
     t!(fs::create_dir_all(&libdir));
-    copy(&build.compiler_rt_built.borrow()[target],
-         &libdir.join(staticlib("compiler-rt", target)));
+    // FIXME(stage0) remove this `if` after the next snapshot
+    // The stage0 compiler still passes the `-lcompiler-rt` flag to the linker but now `bootstrap`
+    // never builds a `libcopmiler-rt.a`! We'll fill the hole by simply copying stage0's
+    // `libcompiler-rt.a` to where the stage1's one is expected (though we could as well just use
+    // an empty `.a` archive). Note that the symbols of that stage0 `libcompiler-rt.a` won't make
+    // it to the final binary because now `libcore.rlib` also contains the symbols that
+    // `libcompiler-rt.a` provides. Since that rlib appears first in the linker arguments, its
+    // symbols are used instead of `libcompiler-rt.a`'s.
+    if compiler.stage == 0 {
+        let rtlib = &staticlib("compiler-rt", target);
+        let src = build.rustc.parent().unwrap().parent().unwrap().join("lib").join("rustlib")
+            .join(target).join("lib").join(rtlib);
+        copy(&src, &libdir.join(rtlib));
+    }
 
     // Some platforms have startup objects that may be required to produce the
     // libstd dynamic library, for example.
@@ -59,8 +69,8 @@ pub fn std<'a>(build: &'a Build, target: &str, compiler: &Compiler<'a>) {
             cargo.env("JEMALLOC_OVERRIDE", jemalloc);
         }
     }
-    if let Some(ref p) = build.config.musl_root {
-        if target.contains("musl") {
+    if target.contains("musl") {
+        if let Some(p) = build.musl_root(target) {
             cargo.env("MUSL_ROOT", p);
         }
     }
@@ -83,26 +93,24 @@ pub fn std_link(build: &Build,
 
     // If we're linking one compiler host's output into another, then we weren't
     // called from the `std` method above. In that case we clean out what's
-    // already there and then also link compiler-rt into place.
+    // already there.
     if host != compiler.host {
         let _ = fs::remove_dir_all(&libdir);
         t!(fs::create_dir_all(&libdir));
-        copy(&build.compiler_rt_built.borrow()[target],
-             &libdir.join(staticlib("compiler-rt", target)));
     }
     add_to_sysroot(&out_dir, &libdir);
 
     if target.contains("musl") && !target.contains("mips") {
-        copy_third_party_objects(build, target, &libdir);
+        copy_musl_third_party_objects(build, &libdir);
     }
 }
 
 /// Copies the crt(1,i,n).o startup objects
 ///
 /// Only required for musl targets that statically link to libc
-fn copy_third_party_objects(build: &Build, target: &str, into: &Path) {
+fn copy_musl_third_party_objects(build: &Build, into: &Path) {
     for &obj in &["crt1.o", "crti.o", "crtn.o"] {
-        copy(&compiler_file(build.cc(target), obj), &into.join(obj));
+        copy(&build.config.musl_root.as_ref().unwrap().join("lib").join(obj), &into.join(obj));
     }
 }
 
@@ -203,6 +211,10 @@ pub fn rustc<'a>(build: &'a Build, target: &str, compiler: &Compiler<'a>) {
         cargo.env("LLVM_RUSTLLVM", "1");
     }
     cargo.env("LLVM_CONFIG", build.llvm_config(target));
+    let target_config = build.config.target_config.get(target);
+    if let Some(s) = target_config.and_then(|c| c.llvm_config.as_ref()) {
+        cargo.env("CFG_LLVM_ROOT", s);
+    }
     if build.config.llvm_static_stdcpp {
         cargo.env("LLVM_STATIC_STDCPP",
                   compiler_file(build.cxx(target), "libstdc++.a"));

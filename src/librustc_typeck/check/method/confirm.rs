@@ -145,7 +145,7 @@ impl<'a, 'gcx, 'tcx> ConfirmContext<'a, 'gcx, 'tcx> {
     {
         let (autoref, unsize) = if let Some(mutbl) = pick.autoref {
             let region = self.next_region_var(infer::Autoref(self.span));
-            let autoref = AutoPtr(self.tcx.mk_region(region), mutbl);
+            let autoref = AutoPtr(region, mutbl);
             (Some(autoref), pick.unsize.map(|target| {
                 target.adjust_for_autoref(self.tcx, Some(autoref))
             }))
@@ -327,19 +327,22 @@ impl<'a, 'gcx, 'tcx> ConfirmContext<'a, 'gcx, 'tcx> {
         // parameters from the type and those from the method.
         //
         // FIXME -- permit users to manually specify lifetimes
+        let supplied_start = substs.params().len() + method.generics.regions.len();
         Substs::for_item(self.tcx, method.def_id, |def, _| {
-            if let Some(&r) = substs.regions.get(def.index as usize) {
-                r
+            let i = def.index as usize;
+            if i < substs.params().len() {
+                substs.region_at(i)
             } else {
                 self.region_var_for_def(self.span, def)
             }
         }, |def, cur_substs| {
-            if let Some(&ty) = substs.types.get(def.index as usize) {
-                ty
+            let i = def.index as usize;
+            if i < substs.params().len() {
+                substs.type_at(i)
             } else if supplied_method_types.is_empty() {
                 self.type_var_for_def(self.span, def, cur_substs)
             } else {
-                supplied_method_types[def.index as usize - substs.types.len()]
+                supplied_method_types[i - supplied_start]
             }
         })
     }
@@ -469,7 +472,7 @@ impl<'a, 'gcx, 'tcx> ConfirmContext<'a, 'gcx, 'tcx> {
                    i, expr, autoderef_count);
 
             if autoderef_count > 0 {
-                let mut autoderef = self.autoderef(expr.span, self.expr_ty(expr));
+                let mut autoderef = self.autoderef(expr.span, self.node_ty(expr.id));
                 autoderef.nth(autoderef_count).unwrap_or_else(|| {
                     span_bug!(expr.span, "expr was deref-able {} times but now isn't?",
                               autoderef_count);
@@ -498,7 +501,7 @@ impl<'a, 'gcx, 'tcx> ConfirmContext<'a, 'gcx, 'tcx> {
                                 assert!(adr.unsize.is_none());
                                 (adr.autoderefs, None)
                             }
-                            Some(AutoPtr(_, _)) => {
+                            Some(AutoPtr(..)) => {
                                 (adr.autoderefs, adr.unsize.map(|target| {
                                     target.builtin_deref(false, NoPreference)
                                             .expect("fixup: AutoPtr is not &T").ty
@@ -529,7 +532,7 @@ impl<'a, 'gcx, 'tcx> ConfirmContext<'a, 'gcx, 'tcx> {
                                 unsize: None
                             }))), false)
                     };
-                    let index_expr_ty = self.expr_ty(&index_expr);
+                    let index_expr_ty = self.node_ty(index_expr.id);
 
                     let result = self.try_index_step(
                         ty::MethodCall::expr(expr.id),
@@ -544,7 +547,7 @@ impl<'a, 'gcx, 'tcx> ConfirmContext<'a, 'gcx, 'tcx> {
                     if let Some((input_ty, return_ty)) = result {
                         self.demand_suptype(index_expr.span, input_ty, index_expr_ty);
 
-                        let expr_ty = self.expr_ty(&expr);
+                        let expr_ty = self.node_ty(expr.id);
                         self.demand_suptype(expr.span, expr_ty, return_ty);
                     }
                 }
@@ -555,7 +558,7 @@ impl<'a, 'gcx, 'tcx> ConfirmContext<'a, 'gcx, 'tcx> {
                     if self.tables.borrow().method_map.contains_key(&method_call) {
                         let method = self.try_overloaded_deref(expr.span,
                             Some(&base_expr),
-                            self.expr_ty(&base_expr),
+                            self.node_ty(base_expr.id),
                             PreferMutLvalue);
                         let method = method.expect("re-trying deref failed");
                         self.tables.borrow_mut().method_map.insert(method_call, method);

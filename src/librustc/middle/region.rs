@@ -237,7 +237,7 @@ impl CodeExtent {
                         // (This is the special case aluded to in the
                         // doc-comment for this method)
                         let stmt_span = blk.stmts[r.first_statement_index as usize].span;
-                        Some(Span { lo: stmt_span.hi, ..blk.span })
+                        Some(Span { lo: stmt_span.hi, hi: blk.span.hi, expn_id: stmt_span.expn_id })
                     }
                 }
             }
@@ -803,7 +803,8 @@ fn resolve_expr(visitor: &mut RegionResolutionVisitor, expr: &hir::Expr) {
                 terminating(r.id);
             }
 
-            hir::ExprIf(_, ref then, Some(ref otherwise)) => {
+            hir::ExprIf(ref expr, ref then, Some(ref otherwise)) => {
+                terminating(expr.id);
                 terminating(then.id);
                 terminating(otherwise.id);
             }
@@ -955,7 +956,7 @@ fn resolve_local(visitor: &mut RegionResolutionVisitor, local: &hir::Local) {
     ///        | box P&
     fn is_binding_pat(pat: &hir::Pat) -> bool {
         match pat.node {
-            PatKind::Binding(hir::BindByRef(_), _, _) => true,
+            PatKind::Binding(hir::BindByRef(_), ..) => true,
 
             PatKind::Struct(_, ref field_pats, _) => {
                 field_pats.iter().any(|fp| is_binding_pat(&fp.node.pat))

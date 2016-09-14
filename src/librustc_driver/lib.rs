@@ -24,6 +24,7 @@
 #![cfg_attr(not(stage0), deny(warnings))]
 
 #![feature(box_syntax)]
+#![feature(dotdot_in_tuple_patterns)]
 #![feature(libc)]
 #![feature(quote)]
 #![feature(rustc_diagnostic_macros)]
@@ -95,7 +96,6 @@ use std::thread;
 use rustc::session::early_error;
 
 use syntax::{ast, json};
-use syntax::attr::AttrMetaMethods;
 use syntax::codemap::{CodeMap, FileLoader, RealFileLoader};
 use syntax::feature_gate::{GatedCfg, UnstableFeatures};
 use syntax::parse::{self, PResult};
@@ -108,7 +108,7 @@ pub mod test;
 pub mod driver;
 pub mod pretty;
 pub mod target_features;
-
+mod derive_registrar;
 
 const BUG_REPORT_URL: &'static str = "https://github.com/rust-lang/rust/blob/master/CONTRIBUTING.\
                                       md#bug-reports";
@@ -556,7 +556,8 @@ impl<'a> CompilerCalls<'a> for RustcDefaultCalls {
 
 fn save_analysis(sess: &Session) -> bool {
     sess.opts.debugging_opts.save_analysis ||
-    sess.opts.debugging_opts.save_analysis_csv
+    sess.opts.debugging_opts.save_analysis_csv ||
+    sess.opts.debugging_opts.save_analysis_api
 }
 
 fn save_analysis_format(sess: &Session) -> save::Format {
@@ -564,6 +565,8 @@ fn save_analysis_format(sess: &Session) -> save::Format {
         save::Format::Json
     } else if sess.opts.debugging_opts.save_analysis_csv {
         save::Format::Csv
+    } else if sess.opts.debugging_opts.save_analysis_api {
+        save::Format::JsonApi
     } else {
         unreachable!();
     }
@@ -655,17 +658,19 @@ impl RustcDefaultCalls {
                         if !allow_unstable_cfg && GatedCfg::gate(&*cfg).is_some() {
                             continue;
                         }
+
                         if cfg.is_word() {
                             println!("{}", cfg.name());
-                        } else if cfg.is_value_str() {
-                            if let Some(s) = cfg.value_str() {
-                                println!("{}=\"{}\"", cfg.name(), s);
-                            }
+                        } else if let Some(s) = cfg.value_str() {
+                            println!("{}=\"{}\"", cfg.name(), s);
                         } else if cfg.is_meta_item_list() {
                             // Right now there are not and should not be any
                             // MetaItemKind::List items in the configuration returned by
                             // `build_configuration`.
-                            panic!("MetaItemKind::List encountered in default cfg")
+                            panic!("Found an unexpected list in cfg attribute '{}'!", cfg.name())
+                        } else {
+                            // There also shouldn't be literals.
+                            panic!("Found an unexpected literal in cfg attribute '{}'!", cfg.name())
                         }
                     }
                 }
@@ -801,7 +806,7 @@ Available lint options:
     let (plugin_groups, builtin_groups): (Vec<_>, _) = lint_store.get_lint_groups()
                                                                  .iter()
                                                                  .cloned()
-                                                                 .partition(|&(_, _, p)| p);
+                                                                 .partition(|&(.., p)| p);
     let plugin_groups = sort_lint_groups(plugin_groups);
     let builtin_groups = sort_lint_groups(builtin_groups);
 
@@ -861,7 +866,7 @@ Available lint options:
         for (name, to) in lints {
             let name = name.to_lowercase().replace("_", "-");
             let desc = to.into_iter()
-                         .map(|x| x.as_str().replace("_", "-"))
+                         .map(|x| x.to_string().replace("_", "-"))
                          .collect::<Vec<String>>()
                          .join(", ");
             println!("    {}  {}", padded(&name[..]), desc);
@@ -876,7 +881,7 @@ Available lint options:
             println!("Compiler plugins can provide additional lints and lint groups. To see a \
                       listing of these, re-run `rustc -W help` with a crate filename.");
         }
-        (false, _, _) => panic!("didn't load lint plugins but got them anyway!"),
+        (false, ..) => panic!("didn't load lint plugins but got them anyway!"),
         (true, 0, 0) => println!("This crate does not load any lint plugins or lint groups."),
         (true, l, g) => {
             if l > 0 {

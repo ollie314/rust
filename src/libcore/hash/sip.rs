@@ -10,8 +10,6 @@
 
 //! An implementation of SipHash.
 
-use prelude::v1::*;
-
 use marker::PhantomData;
 use ptr;
 
@@ -335,6 +333,7 @@ impl<S: Sip> Clone for Hasher<S> {
 }
 
 impl<S: Sip> Default for Hasher<S> {
+    /// Creates a `Hasher<S>` with the two initial keys set to 0.
     #[inline]
     fn default() -> Hasher<S> {
         Hasher::new_with_keys(0, 0)

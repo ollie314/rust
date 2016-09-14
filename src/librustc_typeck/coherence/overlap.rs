@@ -97,7 +97,7 @@ impl<'cx, 'tcx> OverlapChecker<'cx, 'tcx> {
 impl<'cx, 'tcx,'v> intravisit::Visitor<'v> for OverlapChecker<'cx, 'tcx> {
     fn visit_item(&mut self, item: &'v hir::Item) {
         match item.node {
-            hir::ItemEnum(..) | hir::ItemStruct(..) => {
+            hir::ItemEnum(..) | hir::ItemStruct(..) | hir::ItemUnion(..) => {
                 let type_def_id = self.tcx.map.local_def_id(item.id);
                 self.check_for_overlapping_inherent_impls(type_def_id);
             }
@@ -122,7 +122,7 @@ impl<'cx, 'tcx,'v> intravisit::Visitor<'v> for OverlapChecker<'cx, 'tcx> {
                     err.emit();
                 }
             }
-            hir::ItemImpl(_, _, _, Some(_), _, _) => {
+            hir::ItemImpl(.., Some(_), _, _) => {
                 let impl_def_id = self.tcx.map.local_def_id(item.id);
                 let trait_ref = self.tcx.impl_trait_ref(impl_def_id).unwrap();
                 let trait_def_id = trait_ref.def_id;

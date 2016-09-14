@@ -19,8 +19,8 @@ use util::common::ErrorReported;
 
 use collections::enum_set::{self, EnumSet, CLike};
 use std::fmt;
-use std::ops;
 use std::mem;
+use std::ops;
 use syntax::abi;
 use syntax::ast::{self, Name};
 use syntax::parse::token::keywords;
@@ -106,19 +106,13 @@ pub enum TypeVariants<'tcx> {
     /// A primitive floating-point type. For example, `f64`.
     TyFloat(ast::FloatTy),
 
-    /// An enumerated type, defined with `enum`.
+    /// Structures, enumerations and unions.
     ///
     /// Substs here, possibly against intuition, *may* contain `TyParam`s.
     /// That is, even after substitution it is possible that there are type
-    /// variables. This happens when the `TyEnum` corresponds to an enum
-    /// definition and not a concrete use of it. This is true for `TyStruct`
-    /// as well.
-    TyEnum(AdtDef<'tcx>, &'tcx Substs<'tcx>),
-
-    /// A structure type, defined with `struct`.
-    ///
-    /// See warning about substitutions for enumerated types.
-    TyStruct(AdtDef<'tcx>, &'tcx Substs<'tcx>),
+    /// variables. This happens when the `TyAdt` corresponds to an ADT
+    /// definition and not a concrete use of it.
+    TyAdt(AdtDef<'tcx>, &'tcx Substs<'tcx>),
 
     /// `Box<T>`; this is nominally a struct in the documentation, but is
     /// special-cased internally. For example, it is possible to implicitly
@@ -293,7 +287,7 @@ impl<'tcx> Decodable for ClosureSubsts<'tcx> {
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct TraitObject<'tcx> {
     pub principal: PolyExistentialTraitRef<'tcx>,
-    pub region_bound: ty::Region,
+    pub region_bound: &'tcx ty::Region,
     pub builtin_bounds: BuiltinBounds,
     pub projection_bounds: Vec<PolyExistentialProjection<'tcx>>,
 }
@@ -335,7 +329,7 @@ impl<'tcx> PolyTraitRef<'tcx> {
         self.0.substs
     }
 
-    pub fn input_types(&self) -> &[Ty<'tcx>] {
+    pub fn input_types<'a>(&'a self) -> impl DoubleEndedIterator<Item=Ty<'tcx>> + 'a {
         // FIXME(#20664) every use of this fn is probably a bug, it should yield Binder<>
         self.0.input_types()
     }
@@ -360,12 +354,12 @@ pub struct ExistentialTraitRef<'tcx> {
 }
 
 impl<'tcx> ExistentialTraitRef<'tcx> {
-    pub fn input_types(&self) -> &[Ty<'tcx>] {
+    pub fn input_types<'a>(&'a self) -> impl DoubleEndedIterator<Item=Ty<'tcx>> + 'a {
         // Select only the "input types" from a trait-reference. For
         // now this is all the types that appear in the
         // trait-reference, but it should eventually exclude
         // associated types.
-        &self.substs.types
+        self.substs.types()
     }
 }
 
@@ -376,7 +370,7 @@ impl<'tcx> PolyExistentialTraitRef<'tcx> {
         self.0.def_id
     }
 
-    pub fn input_types(&self) -> &[Ty<'tcx>] {
+    pub fn input_types<'a>(&'a self) -> impl DoubleEndedIterator<Item=Ty<'tcx>> + 'a {
         // FIXME(#20664) every use of this fn is probably a bug, it should yield Binder<>
         self.0.input_types()
     }
@@ -675,6 +669,15 @@ pub enum Region {
     ReErased,
 }
 
+impl<'tcx> Decodable for &'tcx Region {
+    fn decode<D: Decoder>(d: &mut D) -> Result<&'tcx Region, D::Error> {
+        let r = Decodable::decode(d)?;
+        cstore::tls::with_decoding_context(d, |dcx, _| {
+            Ok(dcx.tcx().mk_region(r))
+        })
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, Hash, RustcEncodable, RustcDecodable, Debug)]
 pub struct EarlyBoundRegion {
     pub index: u32,
@@ -908,7 +911,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
         // FIXME(#24885): be smarter here, the AdtDefData::is_empty method could easily be made
         // more complete.
         match self.sty {
-            TyEnum(def, _) | TyStruct(def, _) => def.is_empty(),
+            TyAdt(def, _) => def.is_empty(),
 
             // FIXME(canndrew): There's no reason why these can't be uncommented, they're tested
             // and they don't break anything. But I'm keeping my changes small for now.
@@ -936,7 +939,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
     }
 
     pub fn is_phantom_data(&self) -> bool {
-        if let TyStruct(def, _) = self.sty {
+        if let TyAdt(def, _) = self.sty {
             def.is_phantom_data()
         } else {
             false
@@ -971,8 +974,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
 
     pub fn is_structural(&self) -> bool {
         match self.sty {
-            TyStruct(..) | TyTuple(_) | TyEnum(..) |
-            TyArray(..) | TyClosure(..) => true,
+            TyAdt(..) | TyTuple(..) | TyArray(..) | TyClosure(..) => true,
             _ => self.is_slice() | self.is_trait()
         }
     }
@@ -980,7 +982,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
     #[inline]
     pub fn is_simd(&self) -> bool {
         match self.sty {
-            TyStruct(def, _) => def.is_simd(),
+            TyAdt(def, _) => def.is_simd(),
             _ => false
         }
     }
@@ -995,7 +997,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
 
     pub fn simd_type(&self, tcx: TyCtxt<'a, 'gcx, 'tcx>) -> Ty<'tcx> {
         match self.sty {
-            TyStruct(def, substs) => {
+            TyAdt(def, substs) => {
                 def.struct_variant().fields[0].ty(tcx, substs)
             }
             _ => bug!("simd_type called on invalid type")
@@ -1004,7 +1006,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
 
     pub fn simd_size(&self, _cx: TyCtxt) -> usize {
         match self.sty {
-            TyStruct(def, _) => def.struct_variant().fields.len(),
+            TyAdt(def, _) => def.struct_variant().fields.len(),
             _ => bug!("simd_size called on invalid type")
         }
     }
@@ -1157,7 +1159,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
 
     pub fn fn_sig(&self) -> &'tcx PolyFnSig<'tcx> {
         match self.sty {
-            TyFnDef(_, _, ref f) | TyFnPtr(ref f) => &f.sig,
+            TyFnDef(.., ref f) | TyFnPtr(ref f) => &f.sig,
             _ => bug!("Ty::fn_sig() called on non-fn type: {:?}", self)
         }
     }
@@ -1165,7 +1167,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
     /// Returns the ABI of the given function.
     pub fn fn_abi(&self) -> abi::Abi {
         match self.sty {
-            TyFnDef(_, _, ref f) | TyFnPtr(ref f) => f.abi,
+            TyFnDef(.., ref f) | TyFnPtr(ref f) => f.abi,
             _ => bug!("Ty::fn_abi() called on non-fn type"),
         }
     }
@@ -1189,8 +1191,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
     pub fn ty_to_def_id(&self) -> Option<DefId> {
         match self.sty {
             TyTrait(ref tt) => Some(tt.principal.def_id()),
-            TyStruct(def, _) |
-            TyEnum(def, _) => Some(def.did),
+            TyAdt(def, _) => Some(def.did),
             TyClosure(id, _) => Some(id),
             _ => None
         }
@@ -1198,7 +1199,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
 
     pub fn ty_adt_def(&self) -> Option<AdtDef<'tcx>> {
         match self.sty {
-            TyStruct(adt, _) | TyEnum(adt, _) => Some(adt),
+            TyAdt(adt, _) => Some(adt),
             _ => None
         }
     }
@@ -1206,26 +1207,24 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
     /// Returns the regions directly referenced from this type (but
     /// not types reachable from this type via `walk_tys`). This
     /// ignores late-bound regions binders.
-    pub fn regions(&self) -> Vec<ty::Region> {
+    pub fn regions(&self) -> Vec<&'tcx ty::Region> {
         match self.sty {
             TyRef(region, _) => {
-                vec![*region]
+                vec![region]
             }
             TyTrait(ref obj) => {
                 let mut v = vec![obj.region_bound];
-                v.extend_from_slice(&obj.principal.skip_binder().substs.regions);
+                v.extend(obj.principal.skip_binder().substs.regions());
                 v
             }
-            TyEnum(_, substs) |
-            TyStruct(_, substs) |
-            TyAnon(_, substs) => {
-                substs.regions.to_vec()
+            TyAdt(_, substs) | TyAnon(_, substs) => {
+                substs.regions().collect()
             }
             TyClosure(_, ref substs) => {
-                substs.func_substs.regions.to_vec()
+                substs.func_substs.regions().collect()
             }
             TyProjection(ref data) => {
-                data.trait_ref.substs.regions.to_vec()
+                data.trait_ref.substs.regions().collect()
             }
             TyFnDef(..) |
             TyFnPtr(_) |
@@ -1236,7 +1235,7 @@ impl<'a, 'gcx, 'tcx> TyS<'tcx> {
             TyFloat(_) |
             TyBox(_) |
             TyStr |
-            TyArray(_, _) |
+            TyArray(..) |
             TySlice(_) |
             TyRawPtr(_) |
             TyNever |

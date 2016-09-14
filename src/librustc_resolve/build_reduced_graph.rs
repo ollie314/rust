@@ -26,15 +26,17 @@ use rustc::hir::def::*;
 use rustc::hir::def_id::{CRATE_DEF_INDEX, DefId};
 use rustc::ty::{self, VariantKind};
 
+use std::cell::Cell;
+
 use syntax::ast::Name;
 use syntax::attr;
 use syntax::parse::token;
 
 use syntax::ast::{Block, Crate};
 use syntax::ast::{ForeignItem, ForeignItemKind, Item, ItemKind};
-use syntax::ast::{Mutability, PathListItemKind};
-use syntax::ast::{StmtKind, TraitItemKind};
+use syntax::ast::{Mutability, StmtKind, TraitItemKind};
 use syntax::ast::{Variant, ViewPathGlob, ViewPathList, ViewPathSimple};
+use syntax::parse::token::keywords;
 use syntax::visit::{self, Visitor};
 
 use syntax_pos::{Span, DUMMY_SP};
@@ -56,12 +58,7 @@ impl<'b> Resolver<'b> {
     pub fn build_reduced_graph(&mut self, krate: &Crate) {
         let no_implicit_prelude = attr::contains_name(&krate.attrs, "no_implicit_prelude");
         self.graph_root.no_implicit_prelude.set(no_implicit_prelude);
-
-        let mut visitor = BuildReducedGraphVisitor {
-            parent: self.graph_root,
-            resolver: self,
-        };
-        visit::walk_crate(&mut visitor, krate);
+        visit::walk_crate(&mut BuildReducedGraphVisitor { resolver: self }, krate);
     }
 
     /// Defines `name` in namespace `ns` of module `parent` to be `def` if it is not yet defined;
@@ -84,11 +81,10 @@ impl<'b> Resolver<'b> {
     }
 
     /// Constructs the reduced graph for one item.
-    fn build_reduced_graph_for_item(&mut self, item: &Item, parent_ref: &mut Module<'b>) {
-        let parent = *parent_ref;
+    fn build_reduced_graph_for_item(&mut self, item: &Item) {
+        let parent = self.current_module;
         let name = item.ident.name;
         let sp = item.span;
-        self.current_module = parent;
         let vis = self.resolve_visibility(&item.vis);
 
         match item.node {
@@ -130,15 +126,15 @@ impl<'b> Resolver<'b> {
 
                         let subclass = ImportDirectiveSubclass::single(binding.name, source_name);
                         let span = view_path.span;
-                        parent.add_import_directive(module_path, subclass, span, item.id, vis);
-                        self.unresolved_imports += 1;
+                        self.add_import_directive(module_path, subclass, span, item.id, vis);
                     }
                     ViewPathList(_, ref source_items) => {
                         // Make sure there's at most one `mod` import in the list.
                         let mod_spans = source_items.iter().filter_map(|item| {
-                            match item.node {
-                                PathListItemKind::Mod { .. } => Some(item.span),
-                                _ => None,
+                            if item.node.name.name == keywords::SelfValue.name() {
+                                Some(item.span)
+                            } else {
+                                None
                             }
                         }).collect::<Vec<Span>>();
 
@@ -153,10 +149,12 @@ impl<'b> Resolver<'b> {
                         }
 
                         for source_item in source_items {
-                            let (module_path, name, rename) = match source_item.node {
-                                PathListItemKind::Ident { name, rename, .. } =>
-                                    (module_path.clone(), name.name, rename.unwrap_or(name).name),
-                                PathListItemKind::Mod { rename, .. } => {
+                            let node = source_item.node;
+                            let (module_path, name, rename) = {
+                                if node.name.name != keywords::SelfValue.name() {
+                                    let rename = node.rename.unwrap_or(node.name).name;
+                                    (module_path.clone(), node.name.name, rename)
+                                } else {
                                     let name = match module_path.last() {
                                         Some(name) => *name,
                                         None => {
@@ -170,21 +168,22 @@ impl<'b> Resolver<'b> {
                                         }
                                     };
                                     let module_path = module_path.split_last().unwrap().1;
-                                    let rename = rename.map(|i| i.name).unwrap_or(name);
+                                    let rename = node.rename.map(|i| i.name).unwrap_or(name);
                                     (module_path.to_vec(), name, rename)
                                 }
                             };
                             let subclass = ImportDirectiveSubclass::single(rename, name);
-                            let (span, id) = (source_item.span, source_item.node.id());
-                            parent.add_import_directive(module_path, subclass, span, id, vis);
-                            self.unresolved_imports += 1;
+                            let (span, id) = (source_item.span, source_item.node.id);
+                            self.add_import_directive(module_path, subclass, span, id, vis);
                         }
                     }
                     ViewPathGlob(_) => {
-                        let subclass = GlobImport { is_prelude: is_prelude };
+                        let subclass = GlobImport {
+                            is_prelude: is_prelude,
+                            max_vis: Cell::new(ty::Visibility::PrivateExternal),
+                        };
                         let span = view_path.span;
-                        parent.add_import_directive(module_path, subclass, span, item.id, vis);
-                        self.unresolved_imports += 1;
+                        self.add_import_directive(module_path, subclass, span, item.id, vis);
                     }
                 }
             }
@@ -209,14 +208,16 @@ impl<'b> Resolver<'b> {
             ItemKind::Mod(..) => {
                 let parent_link = ModuleParentLink(parent, name);
                 let def = Def::Mod(self.definitions.local_def_id(item.id));
-                let module = self.new_module(parent_link, Some(def), false);
+                let module = self.new_module(parent_link, Some(def), Some(item.id));
                 module.no_implicit_prelude.set({
                     parent.no_implicit_prelude.get() ||
                         attr::contains_name(&item.attrs, "no_implicit_prelude")
                 });
                 self.define(parent, name, TypeNS, (module, sp, vis));
                 self.module_map.insert(item.id, module);
-                *parent_ref = module;
+
+                // Descend into the module.
+                self.current_module = module;
             }
 
             ItemKind::ForeignMod(..) => {}
@@ -227,11 +228,11 @@ impl<'b> Resolver<'b> {
                 let def = Def::Static(self.definitions.local_def_id(item.id), mutbl);
                 self.define(parent, name, ValueNS, (def, sp, vis));
             }
-            ItemKind::Const(_, _) => {
+            ItemKind::Const(..) => {
                 let def = Def::Const(self.definitions.local_def_id(item.id));
                 self.define(parent, name, ValueNS, (def, sp, vis));
             }
-            ItemKind::Fn(_, _, _, _, _, _) => {
+            ItemKind::Fn(..) => {
                 let def = Def::Fn(self.definitions.local_def_id(item.id));
                 self.define(parent, name, ValueNS, (def, sp, vis));
             }
@@ -245,7 +246,7 @@ impl<'b> Resolver<'b> {
             ItemKind::Enum(ref enum_definition, _) => {
                 let parent_link = ModuleParentLink(parent, name);
                 let def = Def::Enum(self.definitions.local_def_id(item.id));
-                let module = self.new_module(parent_link, Some(def), false);
+                let module = self.new_module(parent_link, Some(def), parent.normal_ancestor_id);
                 self.define(parent, name, TypeNS, (module, sp, vis));
 
                 for variant in &(*enum_definition).variants {
@@ -277,15 +278,30 @@ impl<'b> Resolver<'b> {
                 self.structs.insert(item_def_id, field_names);
             }
 
-            ItemKind::DefaultImpl(_, _) | ItemKind::Impl(..) => {}
+            ItemKind::Union(ref vdata, _) => {
+                let def = Def::Union(self.definitions.local_def_id(item.id));
+                self.define(parent, name, TypeNS, (def, sp, vis));
 
-            ItemKind::Trait(_, _, _, ref items) => {
+                // Record the def ID and fields of this union.
+                let field_names = vdata.fields().iter().enumerate().map(|(index, field)| {
+                    self.resolve_visibility(&field.vis);
+                    field.ident.map(|ident| ident.name)
+                               .unwrap_or_else(|| token::intern(&index.to_string()))
+                }).collect();
+                let item_def_id = self.definitions.local_def_id(item.id);
+                self.structs.insert(item_def_id, field_names);
+            }
+
+            ItemKind::DefaultImpl(..) | ItemKind::Impl(..) => {}
+
+            ItemKind::Trait(.., ref items) => {
                 let def_id = self.definitions.local_def_id(item.id);
 
                 // Add all the items within to a new module.
                 let parent_link = ModuleParentLink(parent, name);
                 let def = Def::Trait(def_id);
-                let module_parent = self.new_module(parent_link, Some(def), false);
+                let module_parent =
+                    self.new_module(parent_link, Some(def), parent.normal_ancestor_id);
                 self.define(parent, name, TypeNS, (module_parent, sp, vis));
 
                 // Add the names of all the items to the trait info.
@@ -309,6 +325,9 @@ impl<'b> Resolver<'b> {
             }
             ItemKind::Mac(_) => panic!("unexpanded macro in resolve!"),
         }
+
+        visit::walk_item(&mut BuildReducedGraphVisitor { resolver: self }, item);
+        self.current_module = parent;
     }
 
     // Constructs the reduced graph for one variant. Variants exist in the
@@ -333,9 +352,8 @@ impl<'b> Resolver<'b> {
     }
 
     /// Constructs the reduced graph for one foreign item.
-    fn build_reduced_graph_for_foreign_item(&mut self,
-                                            foreign_item: &ForeignItem,
-                                            parent: Module<'b>) {
+    fn build_reduced_graph_for_foreign_item(&mut self, foreign_item: &ForeignItem) {
+        let parent = self.current_module;
         let name = foreign_item.ident.name;
 
         let def = match foreign_item.node {
@@ -346,12 +364,12 @@ impl<'b> Resolver<'b> {
                 Def::Static(self.definitions.local_def_id(foreign_item.id), m)
             }
         };
-        self.current_module = parent;
         let vis = self.resolve_visibility(&foreign_item.vis);
         self.define(parent, name, ValueNS, (def, foreign_item.span, vis));
     }
 
-    fn build_reduced_graph_for_block(&mut self, block: &Block, parent: &mut Module<'b>) {
+    fn build_reduced_graph_for_block(&mut self, block: &Block) {
+        let parent = self.current_module;
         if self.block_needs_anonymous_module(block) {
             let block_id = block.id;
 
@@ -360,10 +378,13 @@ impl<'b> Resolver<'b> {
                    block_id);
 
             let parent_link = BlockParentLink(parent, block_id);
-            let new_module = self.new_module(parent_link, None, false);
+            let new_module = self.new_module(parent_link, None, parent.normal_ancestor_id);
             self.module_map.insert(block_id, new_module);
-            *parent = new_module;
+            self.current_module = new_module; // Descend into the block.
         }
+
+        visit::walk_block(&mut BuildReducedGraphVisitor { resolver: self }, block);
+        self.current_module = parent;
     }
 
     /// Builds the reduced graph for a single item in an external crate.
@@ -389,7 +410,7 @@ impl<'b> Resolver<'b> {
                 debug!("(building reduced graph for external crate) building module {} {:?}",
                        name, vis);
                 let parent_link = ModuleParentLink(parent, name);
-                let module = self.new_module(parent_link, Some(def), true);
+                let module = self.new_module(parent_link, Some(def), None);
                 let _ = self.try_define(parent, name, TypeNS, (module, DUMMY_SP, vis));
             }
             Def::Variant(_, variant_id) => {
@@ -431,7 +452,7 @@ impl<'b> Resolver<'b> {
                 }
 
                 let parent_link = ModuleParentLink(parent, name);
-                let module = self.new_module(parent_link, Some(def), true);
+                let module = self.new_module(parent_link, Some(def), None);
                 let _ = self.try_define(parent, name, TypeNS, (module, DUMMY_SP, vis));
             }
             Def::TyAlias(..) | Def::AssociatedTy(..) => {
@@ -449,6 +470,13 @@ impl<'b> Resolver<'b> {
                 }
 
                 // Record the def ID and fields of this struct.
+                let fields = self.session.cstore.struct_field_names(def_id);
+                self.structs.insert(def_id, fields);
+            }
+            Def::Union(def_id) => {
+                let _ = self.try_define(parent, name, TypeNS, (def, DUMMY_SP, vis));
+
+                // Record the def ID and fields of this union.
                 let fields = self.session.cstore.struct_field_names(def_id);
                 self.structs.insert(def_id, fields);
             }
@@ -487,25 +515,18 @@ impl<'b> Resolver<'b> {
 
 struct BuildReducedGraphVisitor<'a, 'b: 'a> {
     resolver: &'a mut Resolver<'b>,
-    parent: Module<'b>,
 }
 
 impl<'a, 'b> Visitor for BuildReducedGraphVisitor<'a, 'b> {
     fn visit_item(&mut self, item: &Item) {
-        let old_parent = self.parent;
-        self.resolver.build_reduced_graph_for_item(item, &mut self.parent);
-        visit::walk_item(self, item);
-        self.parent = old_parent;
+        self.resolver.build_reduced_graph_for_item(item);
     }
 
     fn visit_foreign_item(&mut self, foreign_item: &ForeignItem) {
-        self.resolver.build_reduced_graph_for_foreign_item(foreign_item, &self.parent);
+        self.resolver.build_reduced_graph_for_foreign_item(foreign_item);
     }
 
     fn visit_block(&mut self, block: &Block) {
-        let old_parent = self.parent;
-        self.resolver.build_reduced_graph_for_block(block, &mut self.parent);
-        visit::walk_block(self, block);
-        self.parent = old_parent;
+        self.resolver.build_reduced_graph_for_block(block);
     }
 }

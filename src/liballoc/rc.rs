@@ -182,7 +182,13 @@ struct RcBox<T: ?Sized> {
 /// A reference-counted pointer type over an immutable value.
 ///
 /// See the [module level documentation](./index.html) for more details.
-#[unsafe_no_drop_flag]
+///
+/// Note: the inherent methods defined on `Rc<T>` are all associated functions,
+/// which means that you have to call them as e.g. `Rc::get_mut(&value)` instead
+/// of `value.get_mut()`.  This is so that there are no conflicts with methods
+/// on the inner type `T`, which are what you want to call in the majority of
+/// cases.
+#[cfg_attr(stage0, unsafe_no_drop_flag)]
 #[stable(feature = "rust1", since = "1.0.0")]
 pub struct Rc<T: ?Sized> {
     ptr: Shared<RcBox<T>>,
@@ -263,6 +269,23 @@ impl<T> Rc<T> {
     }
 
     /// Checks if `Rc::try_unwrap` would return `Ok`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// #![feature(rc_would_unwrap)]
+    ///
+    /// use std::rc::Rc;
+    ///
+    /// let x = Rc::new(3);
+    /// assert!(Rc::would_unwrap(&x));
+    /// assert_eq!(Rc::try_unwrap(x), Ok(3));
+    ///
+    /// let x = Rc::new(4);
+    /// let _y = x.clone();
+    /// assert!(!Rc::would_unwrap(&x));
+    /// assert_eq!(Rc::try_unwrap(x), Err(Rc::new(4)));
+    /// ```
     #[unstable(feature = "rc_would_unwrap",
                reason = "just added for niche usecase",
                issue = "28356")]
@@ -449,21 +472,18 @@ impl<T: ?Sized> Drop for Rc<T> {
     fn drop(&mut self) {
         unsafe {
             let ptr = *self.ptr;
-            let thin = ptr as *const ();
 
-            if thin as usize != mem::POST_DROP_USIZE {
-                self.dec_strong();
-                if self.strong() == 0 {
-                    // destroy the contained object
-                    ptr::drop_in_place(&mut (*ptr).value);
+            self.dec_strong();
+            if self.strong() == 0 {
+                // destroy the contained object
+                ptr::drop_in_place(&mut (*ptr).value);
 
-                    // remove the implicit "strong weak" pointer now that we've
-                    // destroyed the contents.
-                    self.dec_weak();
+                // remove the implicit "strong weak" pointer now that we've
+                // destroyed the contents.
+                self.dec_weak();
 
-                    if self.weak() == 0 {
-                        deallocate(ptr as *mut u8, size_of_val(&*ptr), align_of_val(&*ptr))
-                    }
+                if self.weak() == 0 {
+                    deallocate(ptr as *mut u8, size_of_val(&*ptr), align_of_val(&*ptr))
                 }
             }
         }
@@ -707,7 +727,7 @@ impl<T> From<T> for Rc<T> {
 /// dropped.
 ///
 /// See the [module level documentation](./index.html) for more.
-#[unsafe_no_drop_flag]
+#[cfg_attr(stage0, unsafe_no_drop_flag)]
 #[stable(feature = "rc_weak", since = "1.4.0")]
 pub struct Weak<T: ?Sized> {
     ptr: Shared<RcBox<T>>,
@@ -808,15 +828,12 @@ impl<T: ?Sized> Drop for Weak<T> {
     fn drop(&mut self) {
         unsafe {
             let ptr = *self.ptr;
-            let thin = ptr as *const ();
 
-            if thin as usize != mem::POST_DROP_USIZE {
-                self.dec_weak();
-                // the weak count starts at 1, and will only go to zero if all
-                // the strong pointers have disappeared.
-                if self.weak() == 0 {
-                    deallocate(ptr as *mut u8, size_of_val(&*ptr), align_of_val(&*ptr))
-                }
+            self.dec_weak();
+            // the weak count starts at 1, and will only go to zero if all
+            // the strong pointers have disappeared.
+            if self.weak() == 0 {
+                deallocate(ptr as *mut u8, size_of_val(&*ptr), align_of_val(&*ptr))
             }
         }
     }
@@ -853,6 +870,7 @@ impl<T: ?Sized + fmt::Debug> fmt::Debug for Weak<T> {
 
 #[stable(feature = "downgraded_weak", since = "1.10.0")]
 impl<T> Default for Weak<T> {
+    /// Creates a new `Weak<T>`.
     fn default() -> Weak<T> {
         Weak::new()
     }

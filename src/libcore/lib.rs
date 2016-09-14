@@ -67,8 +67,6 @@
 #![deny(missing_debug_implementations)]
 #![cfg_attr(not(stage0), deny(warnings))]
 
-#![cfg_attr(stage0, allow(unused_attributes))]
-
 #![feature(allow_internal_unstable)]
 #![feature(asm)]
 #![feature(associated_type_defaults)]
@@ -92,9 +90,12 @@
 #![feature(staged_api)]
 #![feature(unboxed_closures)]
 #![feature(question_mark)]
+#![feature(never_type)]
+#![feature(prelude_import)]
 
-// NOTE: remove the cfg_attr next snapshot
-#![cfg_attr(not(stage0), feature(never_type))]
+#[prelude_import]
+#[allow(unused)]
+use prelude::v1::*;
 
 #[macro_use]
 mod macros;

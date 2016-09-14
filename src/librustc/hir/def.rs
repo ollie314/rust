@@ -41,6 +41,7 @@ pub enum Def {
     // If Def::Struct lives in value namespace (e.g. tuple struct, unit struct expressions)
     // it denotes a constructor and its DefId refers to NodeId of the struct's constructor.
     Struct(DefId),
+    Union(DefId),
     Label(ast::NodeId),
     Method(DefId),
     Err,
@@ -103,13 +104,13 @@ impl Def {
     pub fn var_id(&self) -> ast::NodeId {
         match *self {
             Def::Local(_, id) |
-            Def::Upvar(_, id, _, _) => {
+            Def::Upvar(_, id, ..) => {
                 id
             }
 
             Def::Fn(..) | Def::Mod(..) | Def::ForeignMod(..) | Def::Static(..) |
             Def::Variant(..) | Def::Enum(..) | Def::TyAlias(..) | Def::AssociatedTy(..) |
-            Def::TyParam(..) | Def::Struct(..) | Def::Trait(..) |
+            Def::TyParam(..) | Def::Struct(..) | Def::Union(..) | Def::Trait(..) |
             Def::Method(..) | Def::Const(..) | Def::AssociatedConst(..) |
             Def::PrimTy(..) | Def::Label(..) | Def::SelfTy(..) | Def::Err => {
                 bug!("attempted .var_id() on invalid {:?}", self)
@@ -121,9 +122,9 @@ impl Def {
         match *self {
             Def::Fn(id) | Def::Mod(id) | Def::ForeignMod(id) | Def::Static(id, _) |
             Def::Variant(_, id) | Def::Enum(id) | Def::TyAlias(id) | Def::AssociatedTy(_, id) |
-            Def::TyParam(id) | Def::Struct(id) | Def::Trait(id) |
+            Def::TyParam(id) | Def::Struct(id) | Def::Union(id) | Def::Trait(id) |
             Def::Method(id) | Def::Const(id) | Def::AssociatedConst(id) |
-            Def::Local(id, _) | Def::Upvar(id, _, _, _) => {
+            Def::Local(id, _) | Def::Upvar(id, ..) => {
                 id
             }
 
@@ -147,6 +148,7 @@ impl Def {
             Def::TyAlias(..) => "type",
             Def::AssociatedTy(..) => "associated type",
             Def::Struct(..) => "struct",
+            Def::Union(..) => "union",
             Def::Trait(..) => "trait",
             Def::Method(..) => "method",
             Def::Const(..) => "constant",

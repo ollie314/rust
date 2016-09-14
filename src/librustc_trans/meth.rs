@@ -20,13 +20,12 @@ use rustc::traits::{self, Reveal};
 use abi::FnType;
 use base::*;
 use build::*;
-use callee::{Callee, Virtual, ArgVals, trans_fn_pointer_shim};
+use callee::{Callee, Virtual, trans_fn_pointer_shim};
 use closure;
 use common::*;
 use consts;
 use debuginfo::DebugLoc;
 use declare;
-use expr;
 use glue;
 use machine;
 use type_::Type;
@@ -96,33 +95,31 @@ pub fn trans_object_shim<'a, 'tcx>(ccx: &'a CrateContext<'a, 'tcx>,
     let (block_arena, fcx): (TypedArena<_>, FunctionContext);
     block_arena = TypedArena::new();
     fcx = FunctionContext::new(ccx, llfn, fn_ty, None, &block_arena);
-    let mut bcx = fcx.init(false, None);
-    assert!(!fcx.needs_ret_allocas);
+    let mut bcx = fcx.init(false);
 
-
-    let dest =
-        fcx.llretslotptr.get().map(
-            |_| expr::SaveIn(fcx.get_ret_slot(bcx, "ret_slot")));
+    let dest = fcx.llretslotptr.get();
 
     debug!("trans_object_shim: method_offset_in_vtable={}",
            vtable_index);
 
     let llargs = get_params(fcx.llfn);
-    let args = ArgVals(&llargs[fcx.fn_ty.ret.is_indirect() as usize..]);
 
     let callee = Callee {
         data: Virtual(vtable_index),
         ty: method_ty
     };
-    bcx = callee.call(bcx, DebugLoc::None, args, dest).bcx;
+    bcx = callee.call(bcx, DebugLoc::None,
+                      &llargs[fcx.fn_ty.ret.is_indirect() as usize..], dest).bcx;
 
     fcx.finish(bcx, DebugLoc::None);
 
     llfn
 }
 
-/// Creates a returns a dynamic vtable for the given type and vtable origin.
+/// Creates a dynamic vtable for the given type and vtable origin.
 /// This is used only for objects.
+///
+/// The vtables are cached instead of created on every call.
 ///
 /// The `trait_ref` encodes the erased self type. Hence if we are
 /// making an object `Foo<Trait>` from a value of type `Foo<T>`, then
@@ -160,7 +157,7 @@ pub fn get_vtable<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
                 get_vtable_methods(tcx, id, substs)
                     .into_iter()
                     .map(|opt_mth| opt_mth.map_or(nullptr, |mth| {
-                        Callee::def(ccx, mth.method.def_id, &mth.substs).reify(ccx).val
+                        Callee::def(ccx, mth.method.def_id, &mth.substs).reify(ccx)
                     }))
                     .collect::<Vec<_>>()
                     .into_iter()
@@ -270,7 +267,7 @@ pub fn get_vtable_methods<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             // the method may have some early-bound lifetimes, add
             // regions for those
             let method_substs = Substs::for_item(tcx, trait_method_def_id,
-                                                 |_, _| ty::ReErased,
+                                                 |_, _| tcx.mk_region(ty::ReErased),
                                                  |_, _| tcx.types.err);
 
             // The substitutions we have are on the impl, so we grab
@@ -312,14 +309,14 @@ pub fn get_impl_method<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                  name: Name)
                                  -> ImplMethod<'tcx>
 {
-    assert!(!substs.types.needs_infer());
+    assert!(!substs.needs_infer());
 
     let trait_def_id = tcx.trait_id_of_impl(impl_def_id).unwrap();
     let trait_def = tcx.lookup_trait_def(trait_def_id);
 
     match trait_def.ancestors(impl_def_id).fn_defs(tcx, name).next() {
         Some(node_item) => {
-            let substs = tcx.normalizing_infer_ctxt(Reveal::All).enter(|infcx| {
+            let substs = tcx.infer_ctxt(None, None, Reveal::All).enter(|infcx| {
                 let substs = substs.rebase_onto(tcx, trait_def_id, impl_substs);
                 let substs = traits::translate_substs(&infcx, impl_def_id,
                                                       substs, node_item.node);

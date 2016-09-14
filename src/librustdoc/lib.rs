@@ -20,6 +20,7 @@
 
 #![feature(box_patterns)]
 #![feature(box_syntax)]
+#![feature(dotdot_in_tuple_patterns)]
 #![feature(libc)]
 #![feature(rustc_private)]
 #![feature(set_stdio)]
@@ -35,6 +36,7 @@ extern crate libc;
 extern crate rustc;
 extern crate rustc_const_eval;
 extern crate rustc_const_math;
+extern crate rustc_data_structures;
 extern crate rustc_trans;
 extern crate rustc_driver;
 extern crate rustc_resolve;
@@ -86,7 +88,6 @@ pub mod plugins;
 pub mod visit_ast;
 pub mod visit_lib;
 pub mod test;
-mod flock;
 
 use clean::Attributes;
 
@@ -420,7 +421,7 @@ fn rust_input(cratefile: &str, externs: Externs, matches: &getopts::Matches) -> 
     let mut pm = plugins::PluginManager::new(PathBuf::from(path));
     for pass in &passes {
         let plugin = match PASSES.iter()
-                                 .position(|&(p, _, _)| {
+                                 .position(|&(p, ..)| {
                                      p == *pass
                                  }) {
             Some(i) => PASSES[i].1,

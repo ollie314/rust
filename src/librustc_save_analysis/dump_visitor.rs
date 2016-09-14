@@ -36,7 +36,7 @@ use rustc::ty::{self, TyCtxt, ImplOrTraitItem, ImplOrTraitItemContainer};
 use std::collections::HashSet;
 use std::hash::*;
 
-use syntax::ast::{self, NodeId, PatKind};
+use syntax::ast::{self, NodeId, PatKind, Attribute};
 use syntax::parse::token::{self, keywords};
 use syntax::visit::{self, Visitor};
 use syntax::print::pprust::{path_to_string, ty_to_string, bounds_to_string, generics_to_string};
@@ -44,7 +44,7 @@ use syntax::ptr::P;
 use syntax::codemap::Spanned;
 use syntax_pos::*;
 
-use super::{escape, generated_code, SaveContext, PathCollector};
+use super::{escape, generated_code, SaveContext, PathCollector, docs_for_attrs};
 use super::data::*;
 use super::dump::Dump;
 use super::external_data::Lower;
@@ -300,6 +300,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                 }.lower(self.tcx));
             }
             Def::Struct(..) |
+            Def::Union(..) |
             Def::Enum(..) |
             Def::TyAlias(..) |
             Def::AssociatedTy(..) |
@@ -311,7 +312,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                     qualname: String::new()
                 }.lower(self.tcx));
             }
-            Def::Static(_, _) |
+            Def::Static(..) |
             Def::Const(_) |
             Def::AssociatedConst(..) |
             Def::Local(..) |
@@ -350,7 +351,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
             let mut collector = PathCollector::new();
             collector.visit_pat(&arg.pat);
             let span_utils = self.span.clone();
-            for &(id, ref p, _, _) in &collector.collected_paths {
+            for &(id, ref p, ..) in &collector.collected_paths {
                 let typ = self.tcx.node_types().get(&id).unwrap().to_string();
                 // get the span only for the name of the variable (I hope the path is only ever a
                 // variable name, but who knows?)
@@ -364,7 +365,10 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                         qualname: format!("{}::{}", qualname, path_to_string(p)),
                         type_value: typ,
                         value: String::new(),
-                        scope: 0
+                        scope: 0,
+                        parent: None,
+                        visibility: Visibility::Inherited,
+                        docs: String::new(),
                     }.lower(self.tcx));
                 }
             }
@@ -376,6 +380,8 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                       body: Option<&ast::Block>,
                       id: ast::NodeId,
                       name: ast::Name,
+                      vis: Visibility,
+                      attrs: &[Attribute],
                       span: Span) {
         debug!("process_method: {}:{}", id, name);
 
@@ -416,6 +422,8 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                     qualname: method_data.qualname.clone(),
                     value: sig_str,
                     decl_id: decl_id,
+                    visibility: vis,
+                    docs: docs_for_attrs(attrs),
                 }.lower(self.tcx));
             }
 
@@ -483,7 +491,10 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                     name: name,
                     id: param.id,
                     qualname: qualname,
-                    value: String::new()
+                    value: String::new(),
+                    visibility: Visibility::Inherited,
+                    parent: None,
+                    docs: String::new(),
                 }.lower(self.tcx));
             }
         }
@@ -527,12 +538,15 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
         self.visit_expr(expr);
     }
 
-    fn process_const(&mut self,
-                     id: ast::NodeId,
-                     name: ast::Name,
-                     span: Span,
-                     typ: &ast::Ty,
-                     expr: &ast::Expr) {
+    fn process_assoc_const(&mut self,
+                           id: ast::NodeId,
+                           name: ast::Name,
+                           span: Span,
+                           typ: &ast::Ty,
+                           expr: &ast::Expr,
+                           parent_id: NodeId,
+                           vis: Visibility,
+                           attrs: &[Attribute]) {
         let qualname = format!("::{}", self.tcx.node_path_str(id));
 
         let sub_span = self.span.sub_span_after_keyword(span, keywords::Const);
@@ -546,7 +560,10 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                 qualname: qualname,
                 value: self.span.snippet(expr.span),
                 type_value: ty_to_string(&typ),
-                scope: self.cur_scope
+                scope: self.cur_scope,
+                parent: Some(parent_id),
+                visibility: vis,
+                docs: docs_for_attrs(attrs),
             }.lower(self.tcx));
         }
 
@@ -588,6 +605,8 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                 scope: self.cur_scope,
                 value: val,
                 fields: fields,
+                visibility: From::from(&item.vis),
+                docs: docs_for_attrs(&item.attrs),
             }.lower(self.tcx));
         }
 
@@ -639,7 +658,9 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                             qualname: qualname,
                             type_value: enum_data.qualname.clone(),
                             value: val,
-                            scope: enum_data.scope
+                            scope: enum_data.scope,
+                            parent: Some(item.id),
+                            docs: docs_for_attrs(&variant.node.attrs),
                         }.lower(self.tcx));
                     }
                 }
@@ -662,7 +683,9 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                             qualname: qualname,
                             type_value: enum_data.qualname.clone(),
                             value: val,
-                            scope: enum_data.scope
+                            scope: enum_data.scope,
+                            parent: Some(item.id),
+                            docs: docs_for_attrs(&variant.node.attrs),
                         }.lower(self.tcx));
                     }
                 }
@@ -715,7 +738,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
         }
         self.process_generic_params(type_parameters, item.span, "", item.id);
         for impl_item in impl_items {
-            self.visit_impl_item(impl_item);
+            self.process_impl_item(impl_item, item.id);
         }
     }
 
@@ -744,6 +767,8 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                 scope: self.cur_scope,
                 value: val,
                 items: methods.iter().map(|i| i.id).collect(),
+                visibility: From::from(&item.vis),
+                docs: docs_for_attrs(&item.attrs),
             }.lower(self.tcx));
         }
 
@@ -784,7 +809,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
         // walk generics and methods
         self.process_generic_params(generics, item.span, &qualname, item.id);
         for method in methods {
-            self.visit_trait_item(method)
+            self.process_trait_item(method, item.id)
         }
     }
 
@@ -878,7 +903,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                 }
             }
             Def::Local(..) |
-            Def::Static(_,_) |
+            Def::Static(..) |
             Def::Const(..) |
             Def::AssociatedConst(..) |
             Def::Struct(..) |
@@ -967,15 +992,23 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
         self.visit_pat(&p);
 
         for &(id, ref p, immut, _) in &collector.collected_paths {
-            let mut value = if immut == ast::Mutability::Immutable {
-                value.to_string()
-            } else {
-                "<mutable>".to_string()
+            let mut value = match immut {
+                ast::Mutability::Immutable => value.to_string(),
+                _ => String::new(),
             };
             let types = self.tcx.node_types();
-            let typ = types.get(&id).map(|t| t.to_string()).unwrap_or(String::new());
-            value.push_str(": ");
-            value.push_str(&typ);
+            let typ = match types.get(&id) {
+                Some(typ) => {
+                    let typ = typ.to_string();
+                    if !value.is_empty() {
+                        value.push_str(": ");
+                    }
+                    value.push_str(&typ);
+                    typ
+                }
+                None => String::new(),
+            };
+
             // Get the span only for the name of the variable (I hope the path
             // is only ever a variable name, but who knows?).
             let sub_span = self.span.span_for_last_ident(p.span);
@@ -989,7 +1022,10 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                     qualname: format!("{}${}", path_to_string(p), id),
                     value: value,
                     type_value: typ,
-                    scope: 0
+                    scope: 0,
+                    parent: None,
+                    visibility: Visibility::Inherited,
+                    docs: String::new(),
                 }.lower(self.tcx));
             }
         }
@@ -1019,7 +1055,9 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                 self.dumper.macro_data(MacroData {
                     span: sub_span,
                     name: data.name.clone(),
-                    qualname: qualname.clone()
+                    qualname: qualname.clone(),
+                    // FIXME where do macro docs come from?
+                    docs: String::new(),
                 }.lower(self.tcx));
             }
         }
@@ -1032,9 +1070,64 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                     qualname: qualname,
                     scope: data.scope,
                     callee_span: data.callee_span,
-                    imported: data.imported
+                    imported: data.imported,
                 }.lower(self.tcx));
             }
+        }
+    }
+
+    fn process_trait_item(&mut self, trait_item: &ast::TraitItem, trait_id: NodeId) {
+        self.process_macro_use(trait_item.span, trait_item.id);
+        match trait_item.node {
+            ast::TraitItemKind::Const(ref ty, Some(ref expr)) => {
+                self.process_assoc_const(trait_item.id,
+                                         trait_item.ident.name,
+                                         trait_item.span,
+                                         &ty,
+                                         &expr,
+                                         trait_id,
+                                         Visibility::Public,
+                                         &trait_item.attrs);
+            }
+            ast::TraitItemKind::Method(ref sig, ref body) => {
+                self.process_method(sig,
+                                    body.as_ref().map(|x| &**x),
+                                    trait_item.id,
+                                    trait_item.ident.name,
+                                    Visibility::Public,
+                                    &trait_item.attrs,
+                                    trait_item.span);
+            }
+            ast::TraitItemKind::Const(_, None) |
+            ast::TraitItemKind::Type(..) |
+            ast::TraitItemKind::Macro(_) => {}
+        }
+    }
+
+    fn process_impl_item(&mut self, impl_item: &ast::ImplItem, impl_id: NodeId) {
+        self.process_macro_use(impl_item.span, impl_item.id);
+        match impl_item.node {
+            ast::ImplItemKind::Const(ref ty, ref expr) => {
+                self.process_assoc_const(impl_item.id,
+                                         impl_item.ident.name,
+                                         impl_item.span,
+                                         &ty,
+                                         &expr,
+                                         impl_id,
+                                         From::from(&impl_item.vis),
+                                         &impl_item.attrs);
+            }
+            ast::ImplItemKind::Method(ref sig, ref body) => {
+                self.process_method(sig,
+                                    Some(body),
+                                    impl_item.id,
+                                    impl_item.ident.name,
+                                    From::from(&impl_item.vis),
+                                    &impl_item.attrs,
+                                    impl_item.span);
+            }
+            ast::ImplItemKind::Type(_) |
+            ast::ImplItemKind::Macro(_) => {}
         }
     }
 }
@@ -1072,7 +1165,8 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
                                 id: item.id,
                                 mod_id: mod_id,
                                 name: ident.to_string(),
-                                scope: self.cur_scope
+                                scope: self.cur_scope,
+                                visibility: From::from(&item.vis),
                             }.lower(self.tcx));
                         }
                         self.write_sub_paths_truncated(path, true);
@@ -1095,25 +1189,19 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
                                 span: sub_span.expect("No span found for use glob"),
                                 id: item.id,
                                 names: names,
-                                scope: self.cur_scope
+                                scope: self.cur_scope,
+                                visibility: From::from(&item.vis),
                             }.lower(self.tcx));
                         }
                         self.write_sub_paths(path, true);
                     }
                     ast::ViewPathList(ref path, ref list) => {
                         for plid in list {
-                            match plid.node {
-                                ast::PathListItemKind::Ident { id, .. } => {
-                                    let scope = self.cur_scope;
-                                    if let Some(def_id) = self.lookup_type_ref(id) {
-                                        self.process_def_kind(id,
-                                                              plid.span,
-                                                              Some(plid.span),
-                                                              def_id,
-                                                              scope);
-                                    }
-                                }
-                                ast::PathListItemKind::Mod { .. } => (),
+                            let scope = self.cur_scope;
+                            let id = plid.node.id;
+                            if let Some(def_id) = self.lookup_type_ref(id) {
+                                let span = plid.span;
+                                self.process_def_kind(id, span, Some(span), def_id, scope);
                             }
                         }
 
@@ -1143,7 +1231,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
                     }.lower(self.tcx));
                 }
             }
-            Fn(ref decl, _, _, _, ref ty_params, ref body) =>
+            Fn(ref decl, .., ref ty_params, ref body) =>
                 self.process_fn(item, &decl, ty_params, &body),
             Static(ref typ, _, ref expr) =>
                 self.process_static_or_const_item(item, typ, expr),
@@ -1151,7 +1239,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
                 self.process_static_or_const_item(item, &typ, &expr),
             Struct(ref def, ref ty_params) => self.process_struct(item, def, ty_params),
             Enum(ref def, ref ty_params) => self.process_enum(item, def, ty_params),
-            Impl(_, _,
+            Impl(..,
                           ref ty_params,
                           ref trait_ref,
                           ref typ,
@@ -1174,7 +1262,10 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
                         name: item.ident.to_string(),
                         id: item.id,
                         qualname: qualname.clone(),
-                        value: value
+                        value: value,
+                        visibility: From::from(&item.vis),
+                        parent: None,
+                        docs: docs_for_attrs(&item.attrs),
                     }.lower(self.tcx));
                 }
 
@@ -1196,51 +1287,6 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
             if let Some(ref ty) = param.default {
                 self.visit_ty(&ty);
             }
-        }
-    }
-
-    fn visit_trait_item(&mut self, trait_item: &ast::TraitItem) {
-        self.process_macro_use(trait_item.span, trait_item.id);
-        match trait_item.node {
-            ast::TraitItemKind::Const(ref ty, Some(ref expr)) => {
-                self.process_const(trait_item.id,
-                                   trait_item.ident.name,
-                                   trait_item.span,
-                                   &ty,
-                                   &expr);
-            }
-            ast::TraitItemKind::Method(ref sig, ref body) => {
-                self.process_method(sig,
-                                    body.as_ref().map(|x| &**x),
-                                    trait_item.id,
-                                    trait_item.ident.name,
-                                    trait_item.span);
-            }
-            ast::TraitItemKind::Const(_, None) |
-            ast::TraitItemKind::Type(..) |
-            ast::TraitItemKind::Macro(_) => {}
-        }
-    }
-
-    fn visit_impl_item(&mut self, impl_item: &ast::ImplItem) {
-        self.process_macro_use(impl_item.span, impl_item.id);
-        match impl_item.node {
-            ast::ImplItemKind::Const(ref ty, ref expr) => {
-                self.process_const(impl_item.id,
-                                   impl_item.ident.name,
-                                   impl_item.span,
-                                   &ty,
-                                   &expr);
-            }
-            ast::ImplItemKind::Method(ref sig, ref body) => {
-                self.process_method(sig,
-                                    Some(body),
-                                    impl_item.id,
-                                    impl_item.ident.name,
-                                    impl_item.span);
-            }
-            ast::ImplItemKind::Type(_) |
-            ast::ImplItemKind::Macro(_) => {}
         }
     }
 
@@ -1286,7 +1332,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
                 let def = self.tcx.expect_def(hir_expr.id);
                 self.process_struct_lit(ex, path, fields, adt.variant_of_def(def), base)
             }
-            ast::ExprKind::MethodCall(_, _, ref args) => self.process_method_call(ex, args),
+            ast::ExprKind::MethodCall(.., ref args) => self.process_method_call(ex, args),
             ast::ExprKind::Field(ref sub_ex, _) => {
                 self.visit_expr(&sub_ex);
 
@@ -1310,7 +1356,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
                 };
                 let ty = &self.tcx.expr_ty_adjusted(&hir_node).sty;
                 match *ty {
-                    ty::TyStruct(def, _) => {
+                    ty::TyAdt(def, _) => {
                         let sub_span = self.span.sub_span_after_token(ex.span, token::Dot);
                         if !self.span.filter_generated(sub_span, ex.span) {
                             self.dumper.variable_ref(VariableRefData {
@@ -1389,11 +1435,15 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
         for &(id, ref p, immut, ref_kind) in &collector.collected_paths {
             match self.tcx.expect_def(id) {
                 Def::Local(_, id) => {
-                    let value = if immut == ast::Mutability::Immutable {
+                    let mut value = if immut == ast::Mutability::Immutable {
                         self.span.snippet(p.span).to_string()
                     } else {
                         "<mutable>".to_string()
                     };
+                    let typ = self.tcx.node_types()
+                                  .get(&id).map(|t| t.to_string()).unwrap_or(String::new());
+                    value.push_str(": ");
+                    value.push_str(&typ);
 
                     assert!(p.segments.len() == 1,
                             "qualified path for local variable def in arm");
@@ -1405,8 +1455,11 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
                             name: path_to_string(p),
                             qualname: format!("{}${}", path_to_string(p), id),
                             value: value,
-                            type_value: String::new(),
-                            scope: 0
+                            type_value: typ,
+                            scope: 0,
+                            parent: None,
+                            visibility: Visibility::Inherited,
+                            docs: String::new(),
                         }.lower(self.tcx));
                     }
                 }
@@ -1415,7 +1468,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
                     paths_to_process.push((id, p.clone(), Some(ref_kind)))
                 }
                 // FIXME(nrc) what are these doing here?
-                Def::Static(_, _) |
+                Def::Static(..) |
                 Def::Const(..) |
                 Def::AssociatedConst(..) => {}
                 def => error!("unexpected definition kind when processing collected paths: {:?}",

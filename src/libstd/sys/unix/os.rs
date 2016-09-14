@@ -12,7 +12,6 @@
 
 #![allow(unused_imports)] // lots of cfg code here
 
-use prelude::v1::*;
 use os::unix::prelude::*;
 
 use error::Error as StdError;
@@ -585,18 +584,15 @@ pub fn home_dir() -> Option<PathBuf> {
             n if n < 0 => 512 as usize,
             n => n as usize,
         };
-        let me = libc::getuid();
-        loop {
-            let mut buf = Vec::with_capacity(amt);
-            let mut passwd: libc::passwd = mem::zeroed();
+        let mut buf = Vec::with_capacity(amt);
+        let mut passwd: libc::passwd = mem::zeroed();
 
-            if getpwduid_r(me, &mut passwd, &mut buf).is_some() {
-                let ptr = passwd.pw_dir as *const _;
-                let bytes = CStr::from_ptr(ptr).to_bytes().to_vec();
-                return Some(OsStringExt::from_vec(bytes))
-            } else {
-                return None;
-            }
+        if getpwduid_r(libc::getuid(), &mut passwd, &mut buf).is_some() {
+            let ptr = passwd.pw_dir as *const _;
+            let bytes = CStr::from_ptr(ptr).to_bytes().to_vec();
+            Some(OsStringExt::from_vec(bytes))
+        } else {
+            None
         }
     }
 }

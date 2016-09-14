@@ -11,7 +11,7 @@
 use borrow::Borrow;
 use fmt;
 use hash::{Hash, BuildHasher};
-use iter::{Chain, FromIterator};
+use iter::{Chain, FromIterator, FusedIterator};
 use ops::{BitOr, BitAnd, BitXor, Sub};
 
 use super::Recover;
@@ -665,6 +665,7 @@ impl<T, S> Default for HashSet<T, S>
     where T: Eq + Hash,
           S: BuildHasher + Default,
 {
+    /// Creates an empty `HashSet<T, S>` with the `Default` value for the hasher.
     fn default() -> HashSet<T, S> {
         HashSet::with_hasher(Default::default())
     }
@@ -906,6 +907,8 @@ impl<'a, K> Iterator for Iter<'a, K> {
 impl<'a, K> ExactSizeIterator for Iter<'a, K> {
     fn len(&self) -> usize { self.iter.len() }
 }
+#[unstable(feature = "fused", issue = "35602")]
+impl<'a, K> FusedIterator for Iter<'a, K> {}
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<K> Iterator for IntoIter<K> {
@@ -918,6 +921,8 @@ impl<K> Iterator for IntoIter<K> {
 impl<K> ExactSizeIterator for IntoIter<K> {
     fn len(&self) -> usize { self.iter.len() }
 }
+#[unstable(feature = "fused", issue = "35602")]
+impl<K> FusedIterator for IntoIter<K> {}
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<'a, K> Iterator for Drain<'a, K> {
@@ -930,6 +935,8 @@ impl<'a, K> Iterator for Drain<'a, K> {
 impl<'a, K> ExactSizeIterator for Drain<'a, K> {
     fn len(&self) -> usize { self.iter.len() }
 }
+#[unstable(feature = "fused", issue = "35602")]
+impl<'a, K> FusedIterator for Drain<'a, K> {}
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<'a, T, S> Clone for Intersection<'a, T, S> {
@@ -961,6 +968,11 @@ impl<'a, T, S> Iterator for Intersection<'a, T, S>
     }
 }
 
+#[unstable(feature = "fused", issue = "35602")]
+impl<'a, T, S> FusedIterator for Intersection<'a, T, S>
+    where T: Eq + Hash, S: BuildHasher
+{}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<'a, T, S> Clone for Difference<'a, T, S> {
     fn clone(&self) -> Difference<'a, T, S> {
@@ -991,6 +1003,11 @@ impl<'a, T, S> Iterator for Difference<'a, T, S>
     }
 }
 
+#[unstable(feature = "fused", issue = "35602")]
+impl<'a, T, S> FusedIterator for Difference<'a, T, S>
+    where T: Eq + Hash, S: BuildHasher
+{}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<'a, T, S> Clone for SymmetricDifference<'a, T, S> {
     fn clone(&self) -> SymmetricDifference<'a, T, S> {
@@ -1008,10 +1025,20 @@ impl<'a, T, S> Iterator for SymmetricDifference<'a, T, S>
     fn size_hint(&self) -> (usize, Option<usize>) { self.iter.size_hint() }
 }
 
+#[unstable(feature = "fused", issue = "35602")]
+impl<'a, T, S> FusedIterator for SymmetricDifference<'a, T, S>
+    where T: Eq + Hash, S: BuildHasher
+{}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<'a, T, S> Clone for Union<'a, T, S> {
     fn clone(&self) -> Union<'a, T, S> { Union { iter: self.iter.clone() } }
 }
+
+#[unstable(feature = "fused", issue = "35602")]
+impl<'a, T, S> FusedIterator for Union<'a, T, S>
+    where T: Eq + Hash, S: BuildHasher
+{}
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<'a, T, S> Iterator for Union<'a, T, S>
@@ -1041,8 +1068,6 @@ fn assert_covariance() {
 
 #[cfg(test)]
 mod test_set {
-    use prelude::v1::*;
-
     use super::HashSet;
 
     #[test]

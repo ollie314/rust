@@ -22,11 +22,12 @@ use std::io::Read;
 use std::fs::{self, File};
 use std::path::{Path};
 
+use IncrementalHashesMap;
 use super::data::*;
 use super::directory::*;
 use super::dirty_clean;
 use super::hash::*;
-use super::util::*;
+use super::fs::*;
 
 pub type DirtyNodes = FnvHashSet<DepNode<DefPathIndex>>;
 
@@ -38,29 +39,49 @@ type CleanEdges = Vec<(DepNode<DefId>, DepNode<DefId>)>;
 /// early in compilation, before we've really done any work, but
 /// actually it doesn't matter all that much.) See `README.md` for
 /// more general overview.
-pub fn load_dep_graph<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) {
+pub fn load_dep_graph<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                                incremental_hashes_map: &IncrementalHashesMap) {
     if tcx.sess.opts.incremental.is_none() {
         return;
     }
 
+    match prepare_session_directory(tcx) {
+        Ok(true) => {
+            // We successfully allocated a session directory and there is
+            // something in it to load, so continue
+        }
+        Ok(false) => {
+            // We successfully allocated a session directory, but there is no
+            // dep-graph data in it to load (because this is the first
+            // compilation session with this incr. comp. dir.)
+            return
+        }
+        Err(()) => {
+            // Something went wrong while trying to allocate the session
+            // directory. Don't try to use it any further.
+            return
+        }
+    }
+
     let _ignore = tcx.dep_graph.in_ignore();
-    load_dep_graph_if_exists(tcx);
+    load_dep_graph_if_exists(tcx, incremental_hashes_map);
 }
 
-fn load_dep_graph_if_exists<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>) {
-    let dep_graph_path = dep_graph_path(tcx).unwrap();
+fn load_dep_graph_if_exists<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                                      incremental_hashes_map: &IncrementalHashesMap) {
+    let dep_graph_path = dep_graph_path(tcx.sess);
     let dep_graph_data = match load_data(tcx.sess, &dep_graph_path) {
         Some(p) => p,
         None => return // no file
     };
 
-    let work_products_path = tcx_work_products_path(tcx).unwrap();
+    let work_products_path = work_products_path(tcx.sess);
     let work_products_data = match load_data(tcx.sess, &work_products_path) {
         Some(p) => p,
         None => return // no file
     };
 
-    match decode_dep_graph(tcx, &dep_graph_data, &work_products_data) {
+    match decode_dep_graph(tcx, incremental_hashes_map, &dep_graph_data, &work_products_data) {
         Ok(dirty_nodes) => dirty_nodes,
         Err(err) => {
             tcx.sess.warn(
@@ -97,17 +118,18 @@ fn load_data(sess: &Session, path: &Path) -> Option<Vec<u8>> {
 /// Decode the dep graph and load the edges/nodes that are still clean
 /// into `tcx.dep_graph`.
 pub fn decode_dep_graph<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                                  incremental_hashes_map: &IncrementalHashesMap,
                                   dep_graph_data: &[u8],
                                   work_products_data: &[u8])
                                   -> Result<(), Error>
 {
     // Decode the list of work_products
     let mut work_product_decoder = Decoder::new(work_products_data, 0);
-    let work_products = try!(<Vec<SerializedWorkProduct>>::decode(&mut work_product_decoder));
+    let work_products = <Vec<SerializedWorkProduct>>::decode(&mut work_product_decoder)?;
 
     // Deserialize the directory and dep-graph.
     let mut dep_graph_decoder = Decoder::new(dep_graph_data, 0);
-    let prev_commandline_args_hash = try!(u64::decode(&mut dep_graph_decoder));
+    let prev_commandline_args_hash = u64::decode(&mut dep_graph_decoder)?;
 
     if prev_commandline_args_hash != tcx.sess.opts.dep_tracking_hash() {
         // We can't reuse the cache, purge it.
@@ -120,8 +142,8 @@ pub fn decode_dep_graph<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
         return Ok(());
     }
 
-    let directory = try!(DefIdDirectory::decode(&mut dep_graph_decoder));
-    let serialized_dep_graph = try!(SerializedDepGraph::decode(&mut dep_graph_decoder));
+    let directory = DefIdDirectory::decode(&mut dep_graph_decoder)?;
+    let serialized_dep_graph = SerializedDepGraph::decode(&mut dep_graph_decoder)?;
 
     // Retrace the paths in the directory to find their current location (if any).
     let retraced = directory.retrace(tcx);
@@ -133,7 +155,10 @@ pub fn decode_dep_graph<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     // reason for this is that this way we can include nodes that have
     // been removed (which no longer have a `DefId` in the current
     // compilation).
-    let dirty_raw_source_nodes = dirty_nodes(tcx, &serialized_dep_graph.hashes, &retraced);
+    let dirty_raw_source_nodes = dirty_nodes(tcx,
+                                             incremental_hashes_map,
+                                             &serialized_dep_graph.hashes,
+                                             &retraced);
 
     // Create a list of (raw-source-node ->
     // retracted-target-node) edges. In the process of retracing the
@@ -206,15 +231,16 @@ pub fn decode_dep_graph<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 /// Computes which of the original set of def-ids are dirty. Stored in
 /// a bit vector where the index is the DefPathIndex.
 fn dirty_nodes<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                         hashes: &[SerializedHash],
+                         incremental_hashes_map: &IncrementalHashesMap,
+                         serialized_hashes: &[SerializedHash],
                          retraced: &RetracedDefIdDirectory)
                          -> DirtyNodes {
-    let mut hcx = HashContext::new(tcx);
+    let mut hcx = HashContext::new(tcx, incremental_hashes_map);
     let mut dirty_nodes = FnvHashSet();
 
-    for hash in hashes {
+    for hash in serialized_hashes {
         if let Some(dep_node) = retraced.map(&hash.dep_node) {
-            let (_, current_hash) = hcx.hash(&dep_node).unwrap();
+            let current_hash = hcx.hash(&dep_node).unwrap();
             if current_hash == hash.hash {
                 continue;
             }
@@ -250,7 +276,7 @@ fn reconcile_work_products<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                    .saved_files
                    .iter()
                    .all(|&(_, ref file_name)| {
-                       let path = in_incr_comp_dir(tcx.sess, &file_name).unwrap();
+                       let path = in_incr_comp_dir_sess(tcx.sess, &file_name);
                        path.exists()
                    });
             if all_files_exist {
@@ -268,7 +294,7 @@ fn delete_dirty_work_product(tcx: TyCtxt,
                              swp: SerializedWorkProduct) {
     debug!("delete_dirty_work_product({:?})", swp);
     for &(_, ref file_name) in &swp.work_product.saved_files {
-        let path = in_incr_comp_dir(tcx.sess, file_name).unwrap();
+        let path = in_incr_comp_dir_sess(tcx.sess, file_name);
         match fs::remove_file(&path) {
             Ok(()) => { }
             Err(err) => {

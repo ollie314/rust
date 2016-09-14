@@ -27,7 +27,7 @@ use ty::subst::Substs;
 use traits;
 use ty::{self, TraitRef, Ty, TypeAndMut};
 use ty::{TyS, TypeVariants};
-use ty::{AdtDef, ClosureSubsts, Region};
+use ty::{AdtKind, AdtDef, ClosureSubsts, Region};
 use hir::FreevarMap;
 use ty::{BareFnTy, InferTy, ParamTy, ProjectionTy, TraitObject};
 use ty::{TyVar, TyVid, IntVar, IntVid, FloatVar, FloatVid};
@@ -213,7 +213,7 @@ pub struct Tables<'tcx> {
     pub method_map: ty::MethodMap<'tcx>,
 
     /// Borrows
-    pub upvar_capture_map: ty::UpvarCaptureMap,
+    pub upvar_capture_map: ty::UpvarCaptureMap<'tcx>,
 
     /// Records the type of each closure. The def ID is the ID of the
     /// expression defining the closure.
@@ -495,6 +495,10 @@ pub struct GlobalCtxt<'tcx> {
 
     /// Cache for layouts computed from types.
     pub layout_cache: RefCell<FnvHashMap<Ty<'tcx>, &'tcx Layout>>,
+
+    /// Map from function to the `#[derive]` mode that it's defining. Only used
+    /// by `rustc-macro` crates.
+    pub derive_macros: RefCell<NodeMap<token::InternedString>>,
 }
 
 impl<'tcx> GlobalCtxt<'tcx> {
@@ -616,7 +620,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
     pub fn intern_adt_def(self,
                           did: DefId,
-                          kind: ty::AdtKind,
+                          kind: AdtKind,
                           variants: Vec<ty::VariantDefData<'gcx, 'gcx>>)
                           -> ty::AdtDefMaster<'gcx> {
         let def = ty::AdtDefData::new(self, did, kind, variants);
@@ -756,6 +760,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             crate_name: token::intern_and_get_ident(crate_name),
             data_layout: data_layout,
             layout_cache: RefCell::new(FnvHashMap()),
+            derive_macros: RefCell::new(NodeMap()),
        }, f)
     }
 }
@@ -1027,8 +1032,8 @@ impl<'a, 'tcx> TyCtxt<'a, 'tcx, 'tcx> {
     pub fn print_debug_stats(self) {
         sty_debug_print!(
             self,
-            TyEnum, TyBox, TyArray, TySlice, TyRawPtr, TyRef, TyFnDef, TyFnPtr,
-            TyTrait, TyStruct, TyClosure, TyTuple, TyParam, TyInfer, TyProjection, TyAnon);
+            TyAdt, TyBox, TyArray, TySlice, TyRawPtr, TyRef, TyFnDef, TyFnPtr,
+            TyTrait, TyClosure, TyTuple, TyParam, TyInfer, TyProjection, TyAnon);
 
         println!("Substs interner: #{}", self.interners.substs.borrow().len());
         println!("BareFnTy interner: #{}", self.interners.bare_fn.borrow().len());
@@ -1152,12 +1157,17 @@ fn keep_local<'tcx, T: ty::TypeFoldable<'tcx>>(x: &T) -> bool {
 impl_interners!('tcx,
     type_list: mk_type_list(Vec<Ty<'tcx>>, keep_local) -> [Ty<'tcx>],
     substs: mk_substs(Substs<'tcx>, |substs: &Substs| {
-        keep_local(&substs.types) || keep_local(&substs.regions)
+        substs.params().iter().any(keep_local)
     }) -> Substs<'tcx>,
     bare_fn: mk_bare_fn(BareFnTy<'tcx>, |fty: &BareFnTy| {
         keep_local(&fty.sig)
     }) -> BareFnTy<'tcx>,
-    region: mk_region(Region, keep_local) -> Region
+    region: mk_region(Region, |r| {
+        match r {
+            &ty::ReVar(_) | &ty::ReSkolemized(..) => true,
+            _ => false
+        }
+    }) -> Region
 );
 
 impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
@@ -1217,9 +1227,9 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         self.mk_imm_ref(self.mk_region(ty::ReStatic), self.mk_str())
     }
 
-    pub fn mk_enum(self, def: AdtDef<'tcx>, substs: &'tcx Substs<'tcx>) -> Ty<'tcx> {
+    pub fn mk_adt(self, def: AdtDef<'tcx>, substs: &'tcx Substs<'tcx>) -> Ty<'tcx> {
         // take a copy of substs so that we own the vectors inside
-        self.mk_ty(TyEnum(def, substs))
+        self.mk_ty(TyAdt(def, substs))
     }
 
     pub fn mk_box(self, ty: Ty<'tcx>) -> Ty<'tcx> {
@@ -1304,11 +1314,6 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         // take a copy of substs so that we own the vectors inside
         let inner = ProjectionTy { trait_ref: trait_ref, item_name: item_name };
         self.mk_ty(TyProjection(inner))
-    }
-
-    pub fn mk_struct(self, def: AdtDef<'tcx>, substs: &'tcx Substs<'tcx>) -> Ty<'tcx> {
-        // take a copy of substs so that we own the vectors inside
-        self.mk_ty(TyStruct(def, substs))
     }
 
     pub fn mk_closure(self,

@@ -133,7 +133,7 @@ impl<'ast> visit::Visitor for DefCollector<'ast> {
         let def_data = match i.node {
             ItemKind::DefaultImpl(..) | ItemKind::Impl(..) =>
                 DefPathData::Impl,
-            ItemKind::Enum(..) | ItemKind::Struct(..) | ItemKind::Trait(..) |
+            ItemKind::Enum(..) | ItemKind::Struct(..) | ItemKind::Union(..) | ItemKind::Trait(..) |
             ItemKind::ExternCrate(..) | ItemKind::ForeignMod(..) | ItemKind::Ty(..) =>
                 DefPathData::TypeNs(i.ident.name.as_str()),
             ItemKind::Mod(..) => DefPathData::Module(i.ident.name.as_str()),
@@ -164,7 +164,7 @@ impl<'ast> visit::Visitor for DefCollector<'ast> {
                         });
                     }
                 }
-                ItemKind::Struct(ref struct_def, _) => {
+                ItemKind::Struct(ref struct_def, _) | ItemKind::Union(ref struct_def, _) => {
                     // If this is a tuple-like struct, register the constructor.
                     if !struct_def.is_struct() {
                         this.create_def(struct_def.id(),
@@ -302,9 +302,9 @@ impl<'ast> intravisit::Visitor<'ast> for DefCollector<'ast> {
         let def_data = match i.node {
             hir::ItemDefaultImpl(..) | hir::ItemImpl(..) =>
                 DefPathData::Impl,
-            hir::ItemEnum(..) | hir::ItemStruct(..) | hir::ItemTrait(..) |
-            hir::ItemExternCrate(..) | hir::ItemMod(..) | hir::ItemForeignMod(..) |
-            hir::ItemTy(..) =>
+            hir::ItemEnum(..) | hir::ItemStruct(..) | hir::ItemUnion(..) |
+            hir::ItemTrait(..) | hir::ItemExternCrate(..) | hir::ItemMod(..) |
+            hir::ItemForeignMod(..) | hir::ItemTy(..) =>
                 DefPathData::TypeNs(i.name.as_str()),
             hir::ItemStatic(..) | hir::ItemConst(..) | hir::ItemFn(..) =>
                 DefPathData::ValueNs(i.name.as_str()),
@@ -331,7 +331,8 @@ impl<'ast> intravisit::Visitor<'ast> for DefCollector<'ast> {
                         });
                     }
                 }
-                hir::ItemStruct(ref struct_def, _) => {
+                hir::ItemStruct(ref struct_def, _) |
+                hir::ItemUnion(ref struct_def, _) => {
                     // If this is a tuple-like struct, register the constructor.
                     if !struct_def.is_struct() {
                         this.create_def(struct_def.id(),

@@ -73,7 +73,7 @@ impl<'tcx> CrateStore<'tcx> for cstore::CStore {
         decoder::closure_ty(&cdata, def_id.index, tcx)
     }
 
-    fn item_variances(&self, def: DefId) -> ty::ItemVariances {
+    fn item_variances(&self, def: DefId) -> Vec<ty::Variance> {
         self.dep_graph.read(DepNode::MetaData(def));
         let cdata = self.get_crate_data(def.krate);
         decoder::get_item_variances(&cdata, def.index)
@@ -291,13 +291,6 @@ impl<'tcx> CrateStore<'tcx> for cstore::CStore {
         decoder::is_foreign_item(&cdata, did.index)
     }
 
-    fn is_static_method(&self, def: DefId) -> bool
-    {
-        self.dep_graph.read(DepNode::MetaData(def));
-        let cdata = self.get_crate_data(def.krate);
-        decoder::is_static_method(&cdata, def.index)
-    }
-
     fn is_statically_included_foreign_item(&self, id: ast::NodeId) -> bool
     {
         self.do_is_statically_included_foreign_item(id)
@@ -351,6 +344,10 @@ impl<'tcx> CrateStore<'tcx> for cstore::CStore {
     fn is_panic_runtime(&self, cnum: ast::CrateNum) -> bool
     {
         self.get_crate_data(cnum).is_panic_runtime()
+    }
+
+    fn is_compiler_builtins(&self, cnum: ast::CrateNum) -> bool {
+        self.get_crate_data(cnum).is_compiler_builtins()
     }
 
     fn panic_strategy(&self, cnum: ast::CrateNum) -> PanicStrategy {
@@ -432,13 +429,21 @@ impl<'tcx> CrateStore<'tcx> for cstore::CStore {
     /// parent `DefId` as well as some idea of what kind of data the
     /// `DefId` refers to.
     fn def_key(&self, def: DefId) -> hir_map::DefKey {
-        self.dep_graph.read(DepNode::MetaData(def));
+        // Note: loading the def-key (or def-path) for a def-id is not
+        // a *read* of its metadata. This is because the def-id is
+        // really just an interned shorthand for a def-path, which is the
+        // canonical name for an item.
+        //
+        // self.dep_graph.read(DepNode::MetaData(def));
         let cdata = self.get_crate_data(def.krate);
         decoder::def_key(&cdata, def.index)
     }
 
-    fn relative_def_path(&self, def: DefId) -> hir_map::DefPath {
-        self.dep_graph.read(DepNode::MetaData(def));
+    fn relative_def_path(&self, def: DefId) -> Option<hir_map::DefPath> {
+        // See `Note` above in `def_key()` for why this read is
+        // commented out:
+        //
+        // self.dep_graph.read(DepNode::MetaData(def));
         let cdata = self.get_crate_data(def.krate);
         decoder::def_path(&cdata, def.index)
     }
@@ -558,11 +563,6 @@ impl<'tcx> CrateStore<'tcx> for cstore::CStore {
                     .insert(def_id, None);
             }
             decoder::FoundAst::Found(&InlinedItem::Item(d, ref item)) => {
-                assert_eq!(d, def_id);
-                let inlined_root_node_id = find_inlined_item_root(item.id);
-                cache_inlined_item(def_id, item.id, inlined_root_node_id);
-            }
-            decoder::FoundAst::Found(&InlinedItem::Foreign(d, ref item)) => {
                 assert_eq!(d, def_id);
                 let inlined_root_node_id = find_inlined_item_root(item.id);
                 cache_inlined_item(def_id, item.id, inlined_root_node_id);

@@ -215,6 +215,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc_macro"
+version = "0.0.0"
+dependencies = [
+ "syntax 0.0.0",
+]
+
+[[package]]
 name = "rustc_metadata"
 version = "0.0.0"
 dependencies = [
@@ -228,8 +235,10 @@ dependencies = [
  "rustc_data_structures 0.0.0",
  "rustc_errors 0.0.0",
  "rustc_llvm 0.0.0",
+ "rustc_macro 0.0.0",
  "serialize 0.0.0",
  "syntax 0.0.0",
+ "syntax_ext 0.0.0",
  "syntax_pos 0.0.0",
 ]
 
@@ -363,6 +372,7 @@ dependencies = [
  "rustc_back 0.0.0",
  "rustc_const_eval 0.0.0",
  "rustc_const_math 0.0.0",
+ "rustc_data_structures 0.0.0",
  "rustc_driver 0.0.0",
  "rustc_errors 0.0.0",
  "rustc_lint 0.0.0",
@@ -399,6 +409,7 @@ dependencies = [
  "fmt_macros 0.0.0",
  "log 0.0.0",
  "rustc_errors 0.0.0",
+ "rustc_macro 0.0.0",
  "syntax 0.0.0",
  "syntax_pos 0.0.0",
 ]
@@ -410,3 +421,5 @@ dependencies = [
  "serialize 0.0.0",
 ]
 
+[metadata]
+"checksum gcc 0.3.28 (registry+https://github.com/rust-lang/crates.io-index)" = "3da3a2cbaeb01363c8e3704fd9fd0eb2ceb17c6f27abd4c1ef040fb57d20dc79"

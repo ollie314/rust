@@ -16,7 +16,7 @@ import debugger_pretty_printers_common as rustpp
 # We want a version of `range` which doesn't allocate an intermediate list,
 # specifically it should use a lazy iterator. In Python 2 this was `xrange`, but
 # if we're running with Python 3 then we need to use `range` instead.
-if sys.version_info.major >= 3:
+if sys.version_info[0] >= 3:
     xrange = range
 
 #===============================================================================
@@ -36,7 +36,7 @@ class GdbType(rustpp.Type):
         if tag is None:
             return tag
 
-        return tag.replace("&'static ", "&")
+        return rustpp.extract_type_name(tag).replace("&'static ", "&")
 
     def get_dwarf_type_kind(self):
         if self.ty.code == gdb.TYPE_CODE_STRUCT:

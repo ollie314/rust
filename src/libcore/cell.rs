@@ -119,42 +119,64 @@
 //! `Cell<T>`.
 //!
 //! ```
+//! #![feature(core_intrinsics)]
+//! #![feature(shared)]
 //! use std::cell::Cell;
+//! use std::ptr::Shared;
+//! use std::intrinsics::abort;
+//! use std::intrinsics::assume;
 //!
-//! struct Rc<T> {
-//!     ptr: *mut RcBox<T>
+//! struct Rc<T: ?Sized> {
+//!     ptr: Shared<RcBox<T>>
 //! }
 //!
-//! struct RcBox<T> {
-//! # #[allow(dead_code)]
+//! struct RcBox<T: ?Sized> {
+//!     strong: Cell<usize>,
+//!     refcount: Cell<usize>,
 //!     value: T,
-//!     refcount: Cell<usize>
 //! }
 //!
-//! impl<T> Clone for Rc<T> {
+//! impl<T: ?Sized> Clone for Rc<T> {
 //!     fn clone(&self) -> Rc<T> {
-//!         unsafe {
-//!             (*self.ptr).refcount.set((*self.ptr).refcount.get() + 1);
-//!             Rc { ptr: self.ptr }
-//!         }
+//!         self.inc_strong();
+//!         Rc { ptr: self.ptr }
 //!     }
+//! }
+//!
+//! trait RcBoxPtr<T: ?Sized> {
+//!
+//!     fn inner(&self) -> &RcBox<T>;
+//!
+//!     fn strong(&self) -> usize {
+//!         self.inner().strong.get()
+//!     }
+//!
+//!     fn inc_strong(&self) {
+//!         self.inner()
+//!             .strong
+//!             .set(self.strong()
+//!                      .checked_add(1)
+//!                      .unwrap_or_else(|| unsafe { abort() }));
+//!     }
+//! }
+//!
+//! impl<T: ?Sized> RcBoxPtr<T> for Rc<T> {
+//!    fn inner(&self) -> &RcBox<T> {
+//!        unsafe {
+//!            assume(!(*(&self.ptr as *const _ as *const *const ())).is_null());
+//!            &(**self.ptr)
+//!        }
+//!    }
 //! }
 //! ```
 //!
 
 #![stable(feature = "rust1", since = "1.0.0")]
 
-use clone::Clone;
-use cmp::{PartialEq, Eq, PartialOrd, Ord, Ordering};
-use convert::From;
-use default::Default;
+use cmp::Ordering;
 use fmt::{self, Debug, Display};
-use marker::{Copy, PhantomData, Send, Sync, Sized, Unsize};
-use ops::{Deref, DerefMut, Drop, FnOnce, CoerceUnsized};
-use option::Option;
-use option::Option::{None, Some};
-use result::Result;
-use result::Result::{Ok, Err};
+use marker::{PhantomData, Unsize};
+use ops::{Deref, DerefMut, CoerceUnsized};
 
 /// A mutable memory location that admits only `Copy` data.
 ///
@@ -233,8 +255,26 @@ impl<T:Copy> Cell<T> {
     /// ```
     #[inline]
     #[unstable(feature = "as_unsafe_cell", issue = "27708")]
+    #[rustc_deprecated(since = "1.12.0", reason = "renamed to as_ptr")]
     pub fn as_unsafe_cell(&self) -> &UnsafeCell<T> {
         &self.value
+    }
+
+    /// Returns a raw pointer to the underlying data in this cell.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::cell::Cell;
+    ///
+    /// let c = Cell::new(5);
+    ///
+    /// let ptr = c.as_ptr();
+    /// ```
+    #[inline]
+    #[stable(feature = "cell_as_ptr", since = "1.12.0")]
+    pub fn as_ptr(&self) -> *mut T {
+        self.value.get()
     }
 
     /// Returns a mutable reference to the underlying data.
@@ -277,6 +317,7 @@ impl<T:Copy> Clone for Cell<T> {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T:Default + Copy> Default for Cell<T> {
+    /// Creates a `Cell<T>`, with the `Default` value for T.
     #[inline]
     fn default() -> Cell<T> {
         Cell::new(Default::default())
@@ -336,6 +377,9 @@ impl<T: Copy> From<T> for Cell<T> {
         Cell::new(t)
     }
 }
+
+#[unstable(feature = "coerce_unsized", issue = "27732")]
+impl<T: CoerceUnsized<U>, U> CoerceUnsized<Cell<U>> for Cell<T> {}
 
 /// A mutable memory location with dynamically checked borrow rules
 ///
@@ -653,8 +697,26 @@ impl<T: ?Sized> RefCell<T> {
     /// ```
     #[inline]
     #[unstable(feature = "as_unsafe_cell", issue = "27708")]
+    #[rustc_deprecated(since = "1.12.0", reason = "renamed to as_ptr")]
     pub unsafe fn as_unsafe_cell(&self) -> &UnsafeCell<T> {
         &self.value
+    }
+
+    /// Returns a raw pointer to the underlying data in this cell.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::cell::RefCell;
+    ///
+    /// let c = RefCell::new(5);
+    ///
+    /// let ptr = c.as_ptr();
+    /// ```
+    #[inline]
+    #[stable(feature = "cell_as_ptr", since = "1.12.0")]
+    pub fn as_ptr(&self) -> *mut T {
+        self.value.get()
     }
 
     /// Returns a mutable reference to the underlying data.
@@ -697,6 +759,7 @@ impl<T: Clone> Clone for RefCell<T> {
 
 #[stable(feature = "rust1", since = "1.0.0")]
 impl<T:Default> Default for RefCell<T> {
+    /// Creates a `RefCell<T>`, with the `Default` value for T.
     #[inline]
     fn default() -> RefCell<T> {
         RefCell::new(Default::default())
@@ -756,6 +819,9 @@ impl<T> From<T> for RefCell<T> {
         RefCell::new(t)
     }
 }
+
+#[unstable(feature = "coerce_unsized", issue = "27732")]
+impl<T: CoerceUnsized<U>, U> CoerceUnsized<RefCell<U>> for RefCell<T> {}
 
 struct BorrowRef<'b> {
     borrow: &'b Cell<BorrowFlag>,
@@ -1075,6 +1141,7 @@ impl<T: ?Sized> UnsafeCell<T> {
 
 #[stable(feature = "unsafe_cell_default", since = "1.9.0")]
 impl<T: Default> Default for UnsafeCell<T> {
+    /// Creates an `UnsafeCell`, with the `Default` value for T.
     fn default() -> UnsafeCell<T> {
         UnsafeCell::new(Default::default())
     }
@@ -1085,4 +1152,14 @@ impl<T> From<T> for UnsafeCell<T> {
     fn from(t: T) -> UnsafeCell<T> {
         UnsafeCell::new(t)
     }
+}
+
+#[unstable(feature = "coerce_unsized", issue = "27732")]
+impl<T: CoerceUnsized<U>, U> CoerceUnsized<UnsafeCell<U>> for UnsafeCell<T> {}
+
+#[allow(unused)]
+fn assert_coerce_unsized(a: UnsafeCell<&i32>, b: Cell<&i32>, c: RefCell<&i32>) {
+    let _: UnsafeCell<&Send> = a;
+    let _: Cell<&Send> = b;
+    let _: RefCell<&Send> = c;
 }

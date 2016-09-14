@@ -19,7 +19,7 @@ use rustc::hir::def::Def;
 use rustc::middle::const_val::ConstVal;
 use rustc_const_eval as const_eval;
 use rustc::middle::region::CodeExtent;
-use rustc::ty::{self, VariantDef, Ty};
+use rustc::ty::{self, AdtKind, VariantDef, Ty};
 use rustc::ty::cast::CastKind as TyCastKind;
 use rustc::mir::repr::*;
 use rustc::hir;
@@ -108,7 +108,7 @@ impl<'tcx> Mirror<'tcx> for &'tcx hir::Expr {
                                 region, ty::TypeAndMut { ty: expr.ty, mutbl: mutbl }),
                             span: expr.span,
                             kind: ExprKind::Borrow {
-                                region: *region,
+                                region: region,
                                 borrow_kind: to_borrow_kind(mutbl),
                                 arg: expr.to_ref()
                             }
@@ -137,7 +137,7 @@ impl<'tcx> Mirror<'tcx> for &'tcx hir::Expr {
                                 ty: adjusted_ty,
                                 span: self.span,
                                 kind: ExprKind::Borrow {
-                                    region: *r,
+                                    region: r,
                                     borrow_kind: to_borrow_kind(m),
                                     arg: expr.to_ref(),
                                 },
@@ -154,7 +154,7 @@ impl<'tcx> Mirror<'tcx> for &'tcx hir::Expr {
                                 ty: cx.tcx.mk_ref(region, ty::TypeAndMut { ty: expr.ty, mutbl: m }),
                                 span: self.span,
                                 kind: ExprKind::Borrow {
-                                    region: *region,
+                                    region: region,
                                     borrow_kind: to_borrow_kind(m),
                                     arg: expr.to_ref(),
                                 },
@@ -217,7 +217,7 @@ fn make_mirror_unadjusted<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
 
     let kind = match expr.node {
         // Here comes the interesting stuff:
-        hir::ExprMethodCall(_, _, ref args) => {
+        hir::ExprMethodCall(.., ref args) => {
             // Rewrite a.b(c) into UFCS form like Trait::b(a, c)
             let expr = method_callee(cx, expr, ty::MethodCall::expr(expr.id));
             let args = args.iter()
@@ -242,7 +242,7 @@ fn make_mirror_unadjusted<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
                 let method = method_callee(cx, expr, ty::MethodCall::expr(expr.id));
 
                 let sig = match method.ty.sty {
-                    ty::TyFnDef(_, _, fn_ty) => &fn_ty.sig,
+                    ty::TyFnDef(.., fn_ty) => &fn_ty.sig,
                     _ => span_bug!(expr.span, "type of method is not an fn")
                 };
 
@@ -310,7 +310,7 @@ fn make_mirror_unadjusted<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
                 _ => span_bug!(expr.span, "type of & not region"),
             };
             ExprKind::Borrow {
-                region: *region,
+                region: region,
                 borrow_kind: to_borrow_kind(mutbl),
                 arg: expr.to_ref(),
             }
@@ -459,48 +459,50 @@ fn make_mirror_unadjusted<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
 
         hir::ExprStruct(_, ref fields, ref base) => {
             match expr_ty.sty {
-                ty::TyStruct(adt, substs) => {
-                    let field_refs = field_refs(&adt.variants[0], fields);
-                    ExprKind::Adt {
-                        adt_def: adt,
-                        variant_index: 0,
-                        substs: substs,
-                        fields: field_refs,
-                        base: base.as_ref().map(|base| {
-                            FruInfo {
-                                base: base.to_ref(),
-                                field_types: cx.tcx.tables
-                                    .borrow()
-                                    .fru_field_types[&expr.id]
-                                    .clone()
-                            }
-                        })
+                ty::TyAdt(adt, substs) => match adt.adt_kind() {
+                    AdtKind::Struct | AdtKind::Union => {
+                        let field_refs = field_refs(&adt.variants[0], fields);
+                        ExprKind::Adt {
+                            adt_def: adt,
+                            variant_index: 0,
+                            substs: substs,
+                            fields: field_refs,
+                            base: base.as_ref().map(|base| {
+                                FruInfo {
+                                    base: base.to_ref(),
+                                    field_types: cx.tcx.tables
+                                        .borrow()
+                                        .fru_field_types[&expr.id]
+                                        .clone()
+                                }
+                            })
+                        }
                     }
-                }
-                ty::TyEnum(adt, substs) => {
-                    match cx.tcx.expect_def(expr.id) {
-                        Def::Variant(enum_id, variant_id) => {
-                            debug_assert!(adt.did == enum_id);
-                            assert!(base.is_none());
+                    AdtKind::Enum => {
+                        match cx.tcx.expect_def(expr.id) {
+                            Def::Variant(enum_id, variant_id) => {
+                                debug_assert!(adt.did == enum_id);
+                                assert!(base.is_none());
 
-                            let index = adt.variant_index_with_id(variant_id);
-                            let field_refs = field_refs(&adt.variants[index], fields);
-                            ExprKind::Adt {
-                                adt_def: adt,
-                                variant_index: index,
-                                substs: substs,
-                                fields: field_refs,
-                                base: None
+                                let index = adt.variant_index_with_id(variant_id);
+                                let field_refs = field_refs(&adt.variants[index], fields);
+                                ExprKind::Adt {
+                                    adt_def: adt,
+                                    variant_index: index,
+                                    substs: substs,
+                                    fields: field_refs,
+                                    base: None
+                                }
+                            }
+                            ref def => {
+                                span_bug!(
+                                    expr.span,
+                                    "unexpected def: {:?}",
+                                    def);
                             }
                         }
-                        ref def => {
-                            span_bug!(
-                                expr.span,
-                                "unexpected def: {:?}",
-                                def);
-                        }
                     }
-                }
+                },
                 _ => {
                     span_bug!(
                         expr.span,
@@ -579,13 +581,10 @@ fn make_mirror_unadjusted<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
                              body: block::to_expr_ref(cx, body) },
         hir::ExprField(ref source, name) => {
             let index = match cx.tcx.expr_ty_adjusted(source).sty {
-                ty::TyStruct(adt_def, _) =>
+                ty::TyAdt(adt_def, _) =>
                     adt_def.variants[0].index_of_field_named(name.node),
                 ref ty =>
-                    span_bug!(
-                        expr.span,
-                        "field of non-struct: {:?}",
-                        ty),
+                    span_bug!(expr.span, "field of non-ADT: {:?}", ty),
             };
             let index = index.unwrap_or_else(|| {
                 span_bug!(
@@ -680,7 +679,7 @@ fn convert_path_expr<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
             ty::TyFnDef(..) => def_id,
             // A unit struct which is used as a value. We return a completely different ExprKind
             // here to account for this special case.
-            ty::TyStruct(adt_def, substs) => return ExprKind::Adt {
+            ty::TyAdt(adt_def, substs) => return ExprKind::Adt {
                 adt_def: adt_def,
                 variant_index: 0,
                 substs: substs,
@@ -694,7 +693,7 @@ fn convert_path_expr<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
             // expression.
             ty::TyFnDef(..) => variant_id,
             // A unit variant, similar special case to the struct case above.
-            ty::TyEnum(adt_def, substs) => {
+            ty::TyAdt(adt_def, substs) => {
                 debug_assert!(adt_def.did == enum_id);
                 let index = adt_def.variant_index_with_id(variant_id);
                 return ExprKind::Adt {
@@ -743,7 +742,7 @@ fn convert_var<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
             let body_id = match cx.tcx.map.find(closure_expr_id) {
                 Some(map::NodeExpr(expr)) => {
                     match expr.node {
-                        hir::ExprClosure(_, _, ref body, _) => body.id,
+                        hir::ExprClosure(.., ref body, _) => body.id,
                         _ => {
                             span_bug!(expr.span, "closure expr is not a closure expr");
                         }
@@ -842,8 +841,7 @@ fn convert_var<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
                     ExprKind::Deref {
                         arg: Expr {
                             temp_lifetime: temp_lifetime,
-                            ty: cx.tcx.mk_ref(
-                                cx.tcx.mk_region(borrow.region),
+                            ty: cx.tcx.mk_ref(borrow.region,
                                 ty::TypeAndMut {
                                     ty: var_ty,
                                     mutbl: borrow.kind.to_mutbl_lossy()
@@ -907,8 +905,7 @@ fn overloaded_operator<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
         }
 
         PassArgs::ByRef => {
-            let scope = cx.tcx.region_maps.node_extent(expr.id);
-            let region = cx.tcx.mk_region(ty::ReScope(scope));
+            let region = cx.tcx.node_scope_region(expr.id);
             let temp_lifetime = cx.tcx.region_maps.temporary_scope(expr.id);
             argrefs.extend(
                 args.iter()
@@ -922,7 +919,7 @@ fn overloaded_operator<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
                             temp_lifetime: temp_lifetime,
                             ty: adjusted_ty,
                             span: expr.span,
-                            kind: ExprKind::Borrow { region: *region,
+                            kind: ExprKind::Borrow { region: region,
                                                      borrow_kind: BorrowKind::Shared,
                                                      arg: arg.to_ref() }
                         }.to_ref()

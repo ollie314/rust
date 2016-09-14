@@ -252,7 +252,7 @@ impl<'a, 'gcx, 'tcx> AdjustBorrowKind<'a, 'gcx, 'tcx> {
                         match capture {
                             ty::UpvarCapture::ByValue => freevar_ty,
                             ty::UpvarCapture::ByRef(borrow) =>
-                                tcx.mk_ref(tcx.mk_region(borrow.region),
+                                tcx.mk_ref(borrow.region,
                                            ty::TypeAndMut {
                                                ty: freevar_ty,
                                                mutbl: borrow.kind.to_mutbl_lossy(),
@@ -283,8 +283,8 @@ impl<'a, 'gcx, 'tcx> AdjustBorrowKind<'a, 'gcx, 'tcx> {
         debug!("adjust_upvar_borrow_kind_for_consume: guarantor={:?}",
                guarantor);
         match guarantor.cat {
-            Categorization::Deref(_, _, mc::BorrowedPtr(..)) |
-            Categorization::Deref(_, _, mc::Implicit(..)) => {
+            Categorization::Deref(.., mc::BorrowedPtr(..)) |
+            Categorization::Deref(.., mc::Implicit(..)) => {
                 match cmt.note {
                     mc::NoteUpvarRef(upvar_id) => {
                         debug!("adjust_upvar_borrow_kind_for_consume: \
@@ -344,7 +344,7 @@ impl<'a, 'gcx, 'tcx> AdjustBorrowKind<'a, 'gcx, 'tcx> {
                 }
             }
 
-            Categorization::Deref(_, _, mc::UnsafePtr(..)) |
+            Categorization::Deref(.., mc::UnsafePtr(..)) |
             Categorization::StaticItem |
             Categorization::Rvalue(_) |
             Categorization::Local(_) |
@@ -376,7 +376,7 @@ impl<'a, 'gcx, 'tcx> AdjustBorrowKind<'a, 'gcx, 'tcx> {
                 }
             }
 
-            Categorization::Deref(_, _, mc::UnsafePtr(..)) |
+            Categorization::Deref(.., mc::UnsafePtr(..)) |
             Categorization::StaticItem |
             Categorization::Rvalue(_) |
             Categorization::Local(_) |
@@ -536,7 +536,7 @@ impl<'a, 'gcx, 'tcx> euv::Delegate<'tcx> for AdjustBorrowKind<'a, 'gcx, 'tcx> {
               borrow_id: ast::NodeId,
               _borrow_span: Span,
               cmt: mc::cmt<'tcx>,
-              _loan_region: ty::Region,
+              _loan_region: &'tcx ty::Region,
               bk: ty::BorrowKind,
               _loan_cause: euv::LoanCause)
     {

@@ -40,6 +40,7 @@ pub enum ItemType {
     AssociatedType  = 16,
     Constant        = 17,
     AssociatedConst = 18,
+    Union           = 19,
 }
 
 
@@ -50,8 +51,8 @@ pub enum NameSpace {
     Macro,
 }
 
-impl ItemType {
-    pub fn from_item(item: &clean::Item) -> ItemType {
+impl<'a> From<&'a clean::Item> for ItemType {
+    fn from(item: &'a clean::Item) -> ItemType {
         let inner = match item.inner {
             clean::StrippedItem(box ref item) => item,
             ref inner@_ => inner,
@@ -62,6 +63,7 @@ impl ItemType {
             clean::ExternCrateItem(..)     => ItemType::ExternCrate,
             clean::ImportItem(..)          => ItemType::Import,
             clean::StructItem(..)          => ItemType::Struct,
+            clean::UnionItem(..)           => ItemType::Union,
             clean::EnumItem(..)            => ItemType::Enum,
             clean::FunctionItem(..)        => ItemType::Function,
             clean::TypedefItem(..)         => ItemType::Typedef,
@@ -83,10 +85,13 @@ impl ItemType {
             clean::StrippedItem(..)        => unreachable!(),
         }
     }
+}
 
-    pub fn from_type_kind(kind: clean::TypeKind) -> ItemType {
+impl From<clean::TypeKind> for ItemType {
+    fn from(kind: clean::TypeKind) -> ItemType {
         match kind {
             clean::TypeStruct   => ItemType::Struct,
+            clean::TypeUnion    => ItemType::Union,
             clean::TypeEnum     => ItemType::Enum,
             clean::TypeFunction => ItemType::Function,
             clean::TypeTrait    => ItemType::Trait,
@@ -97,13 +102,16 @@ impl ItemType {
             clean::TypeTypedef  => ItemType::Typedef,
         }
     }
+}
 
+impl ItemType {
     pub fn css_class(&self) -> &'static str {
         match *self {
             ItemType::Module          => "mod",
             ItemType::ExternCrate     => "externcrate",
             ItemType::Import          => "import",
             ItemType::Struct          => "struct",
+            ItemType::Union           => "union",
             ItemType::Enum            => "enum",
             ItemType::Function        => "fn",
             ItemType::Typedef         => "type",
@@ -125,6 +133,7 @@ impl ItemType {
     pub fn name_space(&self) -> NameSpace {
         match *self {
             ItemType::Struct |
+            ItemType::Union |
             ItemType::Enum |
             ItemType::Module |
             ItemType::Typedef |

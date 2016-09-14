@@ -10,7 +10,6 @@
 
 //! Support for inlining external documentation into the current AST.
 
-use std::collections::HashSet;
 use std::iter::once;
 
 use syntax::ast;
@@ -21,6 +20,7 @@ use rustc::hir::def::Def;
 use rustc::hir::def_id::DefId;
 use rustc::hir::print as pprust;
 use rustc::ty::{self, TyCtxt};
+use rustc::util::nodemap::FnvHashSet;
 
 use rustc_const_eval::lookup_const_by_id;
 
@@ -87,6 +87,11 @@ fn try_inline_def<'a, 'tcx>(cx: &DocContext, tcx: TyCtxt<'a, 'tcx, 'tcx>,
             record_extern_fqn(cx, did, clean::TypeStruct);
             ret.extend(build_impls(cx, tcx, did));
             clean::StructItem(build_struct(cx, tcx, did))
+        }
+        Def::Union(did) => {
+            record_extern_fqn(cx, did, clean::TypeUnion);
+            ret.extend(build_impls(cx, tcx, did));
+            clean::UnionItem(build_union(cx, tcx, did))
         }
         Def::TyAlias(did) => {
             record_extern_fqn(cx, did, clean::TypeTypedef);
@@ -175,7 +180,7 @@ fn build_external_function<'a, 'tcx>(cx: &DocContext, tcx: TyCtxt<'a, 'tcx, 'tcx
                                      did: DefId) -> clean::Function {
     let t = tcx.lookup_item_type(did);
     let (decl, style, abi) = match t.ty.sty {
-        ty::TyFnDef(_, _, ref f) => ((did, &f.sig).clean(cx), f.unsafety, f.abi),
+        ty::TyFnDef(.., ref f) => ((did, &f.sig).clean(cx), f.unsafety, f.abi),
         _ => panic!("bad function"),
     };
 
@@ -214,12 +219,26 @@ fn build_struct<'a, 'tcx>(cx: &DocContext, tcx: TyCtxt<'a, 'tcx, 'tcx>,
     }
 }
 
+fn build_union<'a, 'tcx>(cx: &DocContext, tcx: TyCtxt<'a, 'tcx, 'tcx>,
+                          did: DefId) -> clean::Union {
+    let t = tcx.lookup_item_type(did);
+    let predicates = tcx.lookup_predicates(did);
+    let variant = tcx.lookup_adt_def(did).struct_variant();
+
+    clean::Union {
+        struct_type: doctree::Plain,
+        generics: (t.generics, &predicates).clean(cx),
+        fields: variant.fields.clean(cx),
+        fields_stripped: false,
+    }
+}
+
 fn build_type<'a, 'tcx>(cx: &DocContext, tcx: TyCtxt<'a, 'tcx, 'tcx>,
                         did: DefId) -> clean::ItemEnum {
     let t = tcx.lookup_item_type(did);
     let predicates = tcx.lookup_predicates(did);
     match t.ty.sty {
-        ty::TyEnum(edef, _) if !tcx.sess.cstore.is_typedef(did) => {
+        ty::TyAdt(edef, _) if edef.is_enum() && !tcx.sess.cstore.is_typedef(did) => {
             return clean::EnumItem(clean::Enum {
                 generics: (t.generics, &predicates).clean(cx),
                 variants_stripped: false,
@@ -425,7 +444,7 @@ pub fn build_impl<'a, 'tcx>(cx: &DocContext,
                 .into_iter()
                 .map(|meth| meth.name.to_string())
                 .collect()
-    }).unwrap_or(HashSet::new());
+    }).unwrap_or(FnvHashSet());
 
     ret.push(clean::Item {
         inner: clean::ImplItem(clean::Impl {
@@ -461,7 +480,7 @@ fn build_module<'a, 'tcx>(cx: &DocContext, tcx: TyCtxt<'a, 'tcx, 'tcx>,
         // If we're reexporting a reexport it may actually reexport something in
         // two namespaces, so the target may be listed twice. Make sure we only
         // visit each node at most once.
-        let mut visited = HashSet::new();
+        let mut visited = FnvHashSet();
         for item in tcx.sess.cstore.item_children(did) {
             match item.def {
                 cstore::DlDef(Def::ForeignMod(did)) => {

@@ -14,7 +14,7 @@
 //! type equality, etc.
 
 use hir::def_id::DefId;
-use ty::subst::Substs;
+use ty::subst::{Kind, Substs};
 use ty::{self, Ty, TyCtxt, TypeFoldable};
 use ty::error::{ExpectedFound, TypeError};
 use std::rc::Rc;
@@ -71,8 +71,8 @@ pub trait TypeRelation<'a, 'gcx: 'a+'tcx, 'tcx: 'a> : Sized {
     fn tys(&mut self, a: Ty<'tcx>, b: Ty<'tcx>)
            -> RelateResult<'tcx, Ty<'tcx>>;
 
-    fn regions(&mut self, a: ty::Region, b: ty::Region)
-               -> RelateResult<'tcx, ty::Region>;
+    fn regions(&mut self, a: &'tcx ty::Region, b: &'tcx ty::Region)
+               -> RelateResult<'tcx, &'tcx ty::Region>;
 
     fn binders<T>(&mut self, a: &ty::Binder<T>, b: &ty::Binder<T>)
                   -> RelateResult<'tcx, ty::Binder<T>>
@@ -139,7 +139,7 @@ fn relate_item_substs<'a, 'gcx, 'tcx, R>(relation: &mut R,
 }
 
 pub fn relate_substs<'a, 'gcx, 'tcx, R>(relation: &mut R,
-                                        variances: Option<&ty::ItemVariances>,
+                                        variances: Option<&Vec<ty::Variance>>,
                                         a_subst: &'tcx Substs<'tcx>,
                                         b_subst: &'tcx Substs<'tcx>)
                                         -> RelateResult<'tcx, &'tcx Substs<'tcx>>
@@ -147,19 +147,18 @@ pub fn relate_substs<'a, 'gcx, 'tcx, R>(relation: &mut R,
 {
     let tcx = relation.tcx();
 
-    let types = a_subst.types.iter().enumerate().map(|(i, a_ty)| {
-        let b_ty = &b_subst.types[i];
-        let variance = variances.map_or(ty::Invariant, |v| v.types[i]);
-        relation.relate_with_variance(variance, a_ty, b_ty)
-    }).collect()?;
+    let params = a_subst.params().iter().zip(b_subst.params()).enumerate().map(|(i, (a, b))| {
+        let variance = variances.map_or(ty::Invariant, |v| v[i]);
+        if let (Some(a_ty), Some(b_ty)) = (a.as_type(), b.as_type()) {
+            Ok(Kind::from(relation.relate_with_variance(variance, &a_ty, &b_ty)?))
+        } else if let (Some(a_r), Some(b_r)) = (a.as_region(), b.as_region()) {
+            Ok(Kind::from(relation.relate_with_variance(variance, &a_r, &b_r)?))
+        } else {
+            bug!()
+        }
+    });
 
-    let regions = a_subst.regions.iter().enumerate().map(|(i, a_r)| {
-        let b_r = &b_subst.regions[i];
-        let variance = variances.map_or(ty::Invariant, |v| v.regions[i]);
-        relation.relate_with_variance(variance, a_r, b_r)
-    }).collect()?;
-
-    Ok(Substs::new(tcx, types, regions))
+    Substs::maybe_new(tcx, params)
 }
 
 impl<'tcx> Relate<'tcx> for &'tcx ty::BareFnTy<'tcx> {
@@ -415,11 +414,11 @@ pub fn super_relate_tys<'a, 'gcx, 'tcx, R>(relation: &mut R,
             Ok(a)
         }
 
-        (&ty::TyEnum(a_def, a_substs), &ty::TyEnum(b_def, b_substs))
+        (&ty::TyAdt(a_def, a_substs), &ty::TyAdt(b_def, b_substs))
             if a_def == b_def =>
         {
             let substs = relate_item_substs(relation, a_def.did, a_substs, b_substs)?;
-            Ok(tcx.mk_enum(a_def, substs))
+            Ok(tcx.mk_adt(a_def, substs))
         }
 
         (&ty::TyTrait(ref a_obj), &ty::TyTrait(ref b_obj)) =>
@@ -439,13 +438,6 @@ pub fn super_relate_tys<'a, 'gcx, 'tcx, R>(relation: &mut R,
                 builtin_bounds: nb,
                 projection_bounds: pb
             }))
-        }
-
-        (&ty::TyStruct(a_def, a_substs), &ty::TyStruct(b_def, b_substs))
-            if a_def == b_def =>
-        {
-            let substs = relate_item_substs(relation, a_def.did, a_substs, b_substs)?;
-            Ok(tcx.mk_struct(a_def, substs))
         }
 
         (&ty::TyClosure(a_id, a_substs),
@@ -473,9 +465,9 @@ pub fn super_relate_tys<'a, 'gcx, 'tcx, R>(relation: &mut R,
 
         (&ty::TyRef(a_r, ref a_mt), &ty::TyRef(b_r, ref b_mt)) =>
         {
-            let r = relation.relate_with_variance(ty::Contravariant, a_r, b_r)?;
+            let r = relation.relate_with_variance(ty::Contravariant, &a_r, &b_r)?;
             let mt = relation.relate(a_mt, b_mt)?;
-            Ok(tcx.mk_ref(tcx.mk_region(r), mt))
+            Ok(tcx.mk_ref(r, mt))
         }
 
         (&ty::TyArray(a_t, sz_a), &ty::TyArray(b_t, sz_b)) =>
@@ -571,11 +563,11 @@ impl<'tcx> Relate<'tcx> for &'tcx Substs<'tcx> {
     }
 }
 
-impl<'tcx> Relate<'tcx> for ty::Region {
+impl<'tcx> Relate<'tcx> for &'tcx ty::Region {
     fn relate<'a, 'gcx, R>(relation: &mut R,
-                           a: &ty::Region,
-                           b: &ty::Region)
-                           -> RelateResult<'tcx, ty::Region>
+                           a: &&'tcx ty::Region,
+                           b: &&'tcx ty::Region)
+                           -> RelateResult<'tcx, &'tcx ty::Region>
         where R: TypeRelation<'a, 'gcx, 'tcx>, 'gcx: 'a+'tcx, 'tcx: 'a
     {
         relation.regions(*a, *b)

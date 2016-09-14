@@ -11,18 +11,17 @@
 //! Rust AST Visitor. Extracts useful information and massages it into a form
 //! usable for clean
 
-use std::collections::HashSet;
 use std::mem;
 
 use syntax::abi;
 use syntax::ast;
 use syntax::attr;
-use syntax::attr::AttrMetaMethods;
 use syntax_pos::Span;
 
 use rustc::hir::map as hir_map;
 use rustc::hir::def::Def;
 use rustc::middle::privacy::AccessLevel;
+use rustc::util::nodemap::FnvHashSet;
 
 use rustc::hir;
 
@@ -42,14 +41,14 @@ pub struct RustdocVisitor<'a, 'tcx: 'a> {
     pub module: Module,
     pub attrs: hir::HirVec<ast::Attribute>,
     pub cx: &'a core::DocContext<'a, 'tcx>,
-    view_item_stack: HashSet<ast::NodeId>,
+    view_item_stack: FnvHashSet<ast::NodeId>,
     inlining_from_glob: bool,
 }
 
 impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
     pub fn new(cx: &'a core::DocContext<'a, 'tcx>) -> RustdocVisitor<'a, 'tcx> {
         // If the root is reexported, terminate all recursion.
-        let mut stack = HashSet::new();
+        let mut stack = FnvHashSet();
         stack.insert(ast::CRATE_NODE_ID);
         RustdocVisitor {
             module: Module::new(None),
@@ -96,6 +95,25 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
         debug!("Visiting struct");
         let struct_type = struct_type_from_def(&*sd);
         Struct {
+            id: item.id,
+            struct_type: struct_type,
+            name: name,
+            vis: item.vis.clone(),
+            stab: self.stability(item.id),
+            depr: self.deprecation(item.id),
+            attrs: item.attrs.clone(),
+            generics: generics.clone(),
+            fields: sd.fields().iter().cloned().collect(),
+            whence: item.span
+        }
+    }
+
+    pub fn visit_union_data(&mut self, item: &hir::Item,
+                            name: ast::Name, sd: &hir::VariantData,
+                            generics: &hir::Generics) -> Union {
+        debug!("Visiting union");
+        let struct_type = struct_type_from_def(&*sd);
+        Union {
             id: item.id,
             struct_type: struct_type,
             name: name,
@@ -189,7 +207,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
             }
             hir::ViewPathList(p, paths) => {
                 let mine = paths.into_iter().filter(|path| {
-                    !self.maybe_inline_local(path.node.id(), path.node.rename(),
+                    !self.maybe_inline_local(path.node.id, path.node.rename,
                                              false, om, please_inline)
                 }).collect::<hir::HirVec<hir::PathListItem>>();
 
@@ -259,6 +277,7 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
             match def {
                 Def::Trait(did) |
                 Def::Struct(did) |
+                Def::Union(did) |
                 Def::Enum(did) |
                 Def::TyAlias(did) if !self_is_hidden => {
                     self.cx.access_levels.borrow_mut().map.insert(did, AccessLevel::Public);
@@ -333,8 +352,8 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                 let node = if item.vis == hir::Public {
                     let please_inline = item.attrs.iter().any(|item| {
                         match item.meta_item_list() {
-                            Some(list) if &item.name()[..] == "doc" => {
-                                list.iter().any(|i| &i.name()[..] == "inline")
+                            Some(list) if item.check_name("doc") => {
+                                list.iter().any(|i| i.check_name("inline"))
                             }
                             _ => false,
                         }
@@ -366,6 +385,8 @@ impl<'a, 'tcx> RustdocVisitor<'a, 'tcx> {
                 om.enums.push(self.visit_enum_def(item, name, ed, gen)),
             hir::ItemStruct(ref sd, ref gen) =>
                 om.structs.push(self.visit_variant_data(item, name, sd, gen)),
+            hir::ItemUnion(ref sd, ref gen) =>
+                om.unions.push(self.visit_union_data(item, name, sd, gen)),
             hir::ItemFn(ref fd, ref unsafety, constness, ref abi, ref gen, _) =>
                 om.fns.push(self.visit_fn(item, name, &**fd, unsafety,
                                           constness, abi, gen)),

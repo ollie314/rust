@@ -394,13 +394,15 @@ pub enum TryRecvError {
 /// This enumeration is the list of possible errors that `recv_timeout` could
 /// not return data when called.
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
-#[unstable(feature = "mpsc_recv_timeout", issue = "34029")]
+#[stable(feature = "mpsc_recv_timeout", since = "1.12.0")]
 pub enum RecvTimeoutError {
     /// This channel is currently empty, but the sender(s) have not yet
     /// disconnected, so data may yet become available.
+    #[stable(feature = "mpsc_recv_timeout", since = "1.12.0")]
     Timeout,
     /// This channel's sending half has become disconnected, and there will
     /// never be any more data received on this channel
+    #[stable(feature = "mpsc_recv_timeout", since = "1.12.0")]
     Disconnected,
 }
 
@@ -912,8 +914,6 @@ impl<T> Receiver<T> {
     /// # Examples
     ///
     /// ```no_run
-    /// #![feature(mpsc_recv_timeout)]
-    ///
     /// use std::sync::mpsc::{self, RecvTimeoutError};
     /// use std::time::Duration;
     ///
@@ -922,7 +922,7 @@ impl<T> Receiver<T> {
     /// let timeout = Duration::from_millis(100);
     /// assert_eq!(Err(RecvTimeoutError::Timeout), recv.recv_timeout(timeout));
     /// ```
-    #[unstable(feature = "mpsc_recv_timeout", issue = "34029")]
+    #[stable(feature = "mpsc_recv_timeout", since = "1.12.0")]
     pub fn recv_timeout(&self, timeout: Duration) -> Result<T, RecvTimeoutError> {
         // Do an optimistic try_recv to avoid the performance impact of
         // Instant::now() in the full-channel case.
@@ -1270,8 +1270,6 @@ impl error::Error for TryRecvError {
 
 #[cfg(test)]
 mod tests {
-    use prelude::v1::*;
-
     use env;
     use super::*;
     use thread;
@@ -1946,8 +1944,6 @@ mod tests {
 
 #[cfg(test)]
 mod sync_tests {
-    use prelude::v1::*;
-
     use env;
     use thread;
     use super::*;

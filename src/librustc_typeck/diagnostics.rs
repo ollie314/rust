@@ -572,7 +572,7 @@ impl Foo for Bar {
     // error, expected u16, found i16
     fn foo(x: i16) { }
 
-    // error, values differ in mutability
+    // error, types differ in mutability
     fn bar(&mut self) { }
 }
 ```
@@ -3422,13 +3422,6 @@ containing the unsized type is the last and only unsized type field in the
 struct.
 "##,
 
-E0379: r##"
-Trait methods cannot be declared `const` by design. For more information, see
-[RFC 911].
-
-[RFC 911]: https://github.com/rust-lang/rfcs/pull/911
-"##,
-
 E0380: r##"
 Default impls are only allowed for traits with no methods or associated items.
 For more information see the [opt-in builtin traits RFC](https://github.com/rust
@@ -4079,4 +4072,6 @@ register_diagnostics! {
     E0563, // cannot determine a type for this `impl Trait`: {}
     E0564, // only named lifetimes are allowed in `impl Trait`,
            // but `{}` was found in the type `{}`
+    E0567, // auto traits can not have type parameters
+    E0568, // auto-traits can not have predicates,
 }

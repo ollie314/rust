@@ -11,7 +11,6 @@
 use borrowck::BorrowckCtxt;
 
 use syntax::ast::{self, MetaItem};
-use syntax::attr::AttrMetaMethods;
 use syntax::ptr::P;
 use syntax_pos::{Span, DUMMY_SP};
 
@@ -19,7 +18,7 @@ use rustc::hir;
 use rustc::hir::intravisit::{FnKind};
 
 use rustc::mir::repr;
-use rustc::mir::repr::{BasicBlock, BasicBlockData, Mir, Statement, Terminator};
+use rustc::mir::repr::{BasicBlock, BasicBlockData, Mir, Statement, Terminator, Location};
 use rustc::session::Session;
 use rustc::ty::{self, TyCtxt};
 
@@ -35,7 +34,7 @@ use self::dataflow::{DataflowOperator};
 use self::dataflow::{Dataflow, DataflowAnalysis, DataflowResults};
 use self::dataflow::{MaybeInitializedLvals, MaybeUninitializedLvals};
 use self::dataflow::{DefinitelyInitializedLvals};
-use self::gather_moves::{MoveData, MovePathIndex, Location};
+use self::gather_moves::{MoveData, MovePathIndex};
 use self::gather_moves::{MovePathContent, MovePathData};
 
 fn has_rustc_mir_with(attrs: &[ast::Attribute], name: &str) -> Option<P<MetaItem>> {
@@ -43,8 +42,9 @@ fn has_rustc_mir_with(attrs: &[ast::Attribute], name: &str) -> Option<P<MetaItem
         if attr.check_name("rustc_mir") {
             let items = attr.meta_item_list();
             for item in items.iter().flat_map(|l| l.iter()) {
-                if item.check_name(name) {
-                    return Some(item.clone())
+                match item.meta_item() {
+                    Some(mi) if mi.check_name(name) => return Some(mi.clone()),
+                    _ => continue
                 }
             }
         }
@@ -67,8 +67,8 @@ pub fn borrowck_mir<'a, 'tcx: 'a>(
     id: ast::NodeId,
     attributes: &[ast::Attribute]) {
     match fk {
-        FnKind::ItemFn(name, _, _, _, _, _, _) |
-        FnKind::Method(name, _, _, _) => {
+        FnKind::ItemFn(name, ..) |
+        FnKind::Method(name, ..) => {
             debug!("borrowck_mir({}) UNIMPLEMENTED", name);
         }
         FnKind::Closure(_) => {
@@ -126,8 +126,6 @@ fn do_dataflow<'a, 'tcx, BD>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                              bd: BD) -> DataflowResults<BD>
     where BD: BitDenotation<Idx=MovePathIndex, Ctxt=MoveDataParamEnv<'tcx>> + DataflowOperator
 {
-    use syntax::attr::AttrMetaMethods;
-
     let name_found = |sess: &Session, attrs: &[ast::Attribute], name| -> Option<String> {
         if let Some(item) = has_rustc_mir_with(attrs, name) {
             if let Some(s) = item.value_str() {
@@ -263,7 +261,7 @@ fn lvalue_contents_drop_state_cannot_differ<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx
                    lv, ty);
             true
         }
-        ty::TyStruct(def, _) | ty::TyEnum(def, _) if def.has_dtor() => {
+        ty::TyAdt(def, _) if def.has_dtor() => {
             debug!("lvalue_contents_drop_state_cannot_differ lv: {:?} ty: {:?} Drop => false",
                    lv, ty);
             true
@@ -367,7 +365,7 @@ fn drop_flag_effects_for_location<'a, 'tcx, F>(
     }
 
     let block = &mir[loc.block];
-    match block.statements.get(loc.index) {
+    match block.statements.get(loc.statement_index) {
         Some(stmt) => match stmt.kind {
             repr::StatementKind::SetDiscriminant{ .. } => {
                 span_bug!(stmt.source_info.span, "SetDiscrimant should not exist during borrowck");

@@ -245,21 +245,23 @@ fn check_for_bindings_named_the_same_as_variants(cx: &MatchCheckCtxt, pat: &Pat)
     pat.walk(|p| {
         if let PatKind::Binding(hir::BindByValue(hir::MutImmutable), name, None) = p.node {
             let pat_ty = cx.tcx.pat_ty(p);
-            if let ty::TyEnum(edef, _) = pat_ty.sty {
-                if let Def::Local(..) = cx.tcx.expect_def(p.id) {
-                    if edef.variants.iter().any(|variant| {
-                        variant.name == name.node && variant.kind == VariantKind::Unit
-                    }) {
-                        let ty_path = cx.tcx.item_path_str(edef.did);
-                        let mut err = struct_span_warn!(cx.tcx.sess, p.span, E0170,
-                            "pattern binding `{}` is named the same as one \
-                             of the variants of the type `{}`",
-                            name.node, ty_path);
-                        help!(err,
-                            "if you meant to match on a variant, \
-                             consider making the path in the pattern qualified: `{}::{}`",
-                            ty_path, name.node);
-                        err.emit();
+            if let ty::TyAdt(edef, _) = pat_ty.sty {
+                if edef.is_enum() {
+                    if let Def::Local(..) = cx.tcx.expect_def(p.id) {
+                        if edef.variants.iter().any(|variant| {
+                            variant.name == name.node && variant.kind == VariantKind::Unit
+                        }) {
+                            let ty_path = cx.tcx.item_path_str(edef.did);
+                            let mut err = struct_span_warn!(cx.tcx.sess, p.span, E0170,
+                                "pattern binding `{}` is named the same as one \
+                                of the variants of the type `{}`",
+                                name.node, ty_path);
+                            help!(err,
+                                "if you meant to match on a variant, \
+                                consider making the path in the pattern qualified: `{}::{}`",
+                                ty_path, name.node);
+                            err.emit();
+                        }
                     }
                 }
             }
@@ -324,7 +326,10 @@ fn check_arms(cx: &MatchCheckCtxt,
                             let &(ref first_arm_pats, _) = &arms[0];
                             let first_pat = &first_arm_pats[0];
                             let span = first_pat.span;
-                            span_err!(cx.tcx.sess, span, E0165, "irrefutable while-let pattern");
+                            struct_span_err!(cx.tcx.sess, span, E0165,
+                                             "irrefutable while-let pattern")
+                                .span_label(span, &format!("irrefutable pattern"))
+                                .emit();
                         },
 
                         hir::MatchSource::ForLoopDesugar => {
@@ -369,8 +374,8 @@ fn check_arms(cx: &MatchCheckCtxt,
 /// Checks for common cases of "catchall" patterns that may not be intended as such.
 fn pat_is_catchall(dm: &DefMap, p: &Pat) -> bool {
     match p.node {
-        PatKind::Binding(_, _, None) => true,
-        PatKind::Binding(_, _, Some(ref s)) => pat_is_catchall(dm, &s),
+        PatKind::Binding(.., None) => true,
+        PatKind::Binding(.., Some(ref s)) => pat_is_catchall(dm, &s),
         PatKind::Ref(ref s, _) => pat_is_catchall(dm, &s),
         PatKind::Tuple(ref v, _) => v.iter().all(|p| pat_is_catchall(dm, &p)),
         _ => false
@@ -379,7 +384,7 @@ fn pat_is_catchall(dm: &DefMap, p: &Pat) -> bool {
 
 fn raw_pat(p: &Pat) -> &Pat {
     match p.node {
-        PatKind::Binding(_, _, Some(ref s)) => raw_pat(&s),
+        PatKind::Binding(.., Some(ref s)) => raw_pat(&s),
         _ => p
     }
 }
@@ -405,10 +410,13 @@ fn check_exhaustive<'a, 'tcx>(cx: &MatchCheckCtxt<'a, 'tcx>,
                         },
                         _ => bug!(),
                     };
-                    span_err!(cx.tcx.sess, sp, E0297,
+                    let pattern_string = pat_to_string(witness);
+                    struct_span_err!(cx.tcx.sess, sp, E0297,
                         "refutable pattern in `for` loop binding: \
                                 `{}` not covered",
-                                pat_to_string(witness));
+                                pattern_string)
+                        .span_label(sp, &format!("pattern `{}` not covered", pattern_string))
+                        .emit();
                 },
                 _ => {
                     let pattern_strings: Vec<_> = witnesses.iter().map(|w| {
@@ -563,7 +571,7 @@ fn construct_witness<'a,'tcx>(cx: &MatchCheckCtxt<'a,'tcx>, ctor: &Constructor,
     let pat = match left_ty.sty {
         ty::TyTuple(..) => PatKind::Tuple(pats.collect(), None),
 
-        ty::TyEnum(adt, _) | ty::TyStruct(adt, _)  => {
+        ty::TyAdt(adt, _) => {
             let v = ctor.variant_for_adt(adt);
             match v.kind {
                 VariantKind::Struct => {
@@ -656,7 +664,8 @@ fn all_constructors(_cx: &MatchCheckCtxt, left_ty: Ty,
             [true, false].iter().map(|b| ConstantValue(ConstVal::Bool(*b))).collect(),
         ty::TySlice(_) =>
             (0..max_slice_length+1).map(|length| Slice(length)).collect(),
-        ty::TyEnum(def, _) => def.variants.iter().map(|v| Variant(v.did)).collect(),
+        ty::TyAdt(def, _) if def.is_enum() =>
+            def.variants.iter().map(|v| Variant(v.did)).collect(),
         _ => vec![Single]
     }
 }
@@ -789,7 +798,8 @@ fn pat_constructors(cx: &MatchCheckCtxt, p: &Pat,
         PatKind::Struct(..) | PatKind::TupleStruct(..) | PatKind::Path(..) =>
             match cx.tcx.expect_def(pat.id) {
                 Def::Variant(_, id) => vec![Variant(id)],
-                Def::Struct(..) | Def::TyAlias(..) | Def::AssociatedTy(..) => vec![Single],
+                Def::Struct(..) | Def::Union(..) |
+                Def::TyAlias(..) | Def::AssociatedTy(..) => vec![Single],
                 Def::Const(..) | Def::AssociatedConst(..) =>
                     span_bug!(pat.span, "const pattern should've been rewritten"),
                 def => span_bug!(pat.span, "pat_constructors: unexpected definition {:?}", def),
@@ -800,7 +810,7 @@ fn pat_constructors(cx: &MatchCheckCtxt, p: &Pat,
             vec![ConstantRange(eval_const_expr(cx.tcx, &lo), eval_const_expr(cx.tcx, &hi))],
         PatKind::Vec(ref before, ref slice, ref after) =>
             match left_ty.sty {
-                ty::TyArray(_, _) => vec![Single],
+                ty::TyArray(..) => vec![Single],
                 ty::TySlice(_) if slice.is_some() => {
                     (before.len() + after.len()..max_slice_length+1)
                         .map(|length| Slice(length))
@@ -833,7 +843,7 @@ pub fn constructor_arity(_cx: &MatchCheckCtxt, ctor: &Constructor, ty: Ty) -> us
             _ => bug!()
         },
         ty::TyRef(..) => 1,
-        ty::TyEnum(adt, _) | ty::TyStruct(adt, _) => {
+        ty::TyAdt(adt, _) => {
             ctor.variant_for_adt(adt).fields.len()
         }
         ty::TyArray(_, n) => n,
@@ -862,7 +872,7 @@ fn wrap_pat<'a, 'b, 'tcx>(cx: &MatchCheckCtxt<'b, 'tcx>,
 {
     let pat_ty = cx.tcx.pat_ty(pat);
     (pat, Some(match pat.node {
-        PatKind::Binding(hir::BindByRef(..), _, _) => {
+        PatKind::Binding(hir::BindByRef(..), ..) => {
             pat_ty.builtin_deref(false, NoPreference).unwrap().ty
         }
         _ => pat_ty
@@ -1121,10 +1131,11 @@ fn check_legality_of_move_bindings(cx: &MatchCheckCtxt,
                 .span_label(p.span, &format!("moves value into pattern guard"))
                 .emit();
         } else if by_ref_span.is_some() {
-            let mut err = struct_span_err!(cx.tcx.sess, p.span, E0009,
-                                           "cannot bind by-move and by-ref in the same pattern");
-            span_note!(&mut err, by_ref_span.unwrap(), "by-ref binding occurs here");
-            err.emit();
+            struct_span_err!(cx.tcx.sess, p.span, E0009,
+                            "cannot bind by-move and by-ref in the same pattern")
+                    .span_label(p.span, &format!("by-move pattern here"))
+                    .span_label(by_ref_span.unwrap(), &format!("both by-ref and by-move used"))
+                    .emit();
         }
     };
 
@@ -1171,7 +1182,7 @@ impl<'a, 'gcx, 'tcx> Delegate<'tcx> for MutationChecker<'a, 'gcx> {
               _: NodeId,
               span: Span,
               _: cmt,
-              _: Region,
+              _: &'tcx Region,
               kind: BorrowKind,
               _: LoanCause) {
         match kind {
@@ -1212,7 +1223,7 @@ struct AtBindingPatternVisitor<'a, 'b:'a, 'tcx:'b> {
 impl<'a, 'b, 'tcx, 'v> Visitor<'v> for AtBindingPatternVisitor<'a, 'b, 'tcx> {
     fn visit_pat(&mut self, pat: &Pat) {
         match pat.node {
-            PatKind::Binding(_, _, ref subpat) => {
+            PatKind::Binding(.., ref subpat) => {
                 if !self.bindings_allowed {
                     span_err!(self.cx.tcx.sess, pat.span, E0303,
                               "pattern bindings are not allowed after an `@`");

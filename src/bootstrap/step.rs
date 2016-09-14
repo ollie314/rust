@@ -82,7 +82,6 @@ macro_rules! targets {
             // There aren't really any parameters to this, but empty structs
             // with braces are unstable so we just pick something that works.
             (llvm, Llvm { _dummy: () }),
-            (compiler_rt, CompilerRt { _dummy: () }),
             (test_helpers, TestHelpers { _dummy: () }),
             (debugger_scripts, DebuggerScripts { stage: u32 }),
 
@@ -92,7 +91,6 @@ macro_rules! targets {
             (doc, Doc { stage: u32 }),
             (doc_book, DocBook { stage: u32 }),
             (doc_nomicon, DocNomicon { stage: u32 }),
-            (doc_style, DocStyle { stage: u32 }),
             (doc_standalone, DocStandalone { stage: u32 }),
             (doc_std, DocStd { stage: u32 }),
             (doc_test, DocTest { stage: u32 }),
@@ -335,8 +333,7 @@ impl<'a> Step<'a> {
                 vec![self.libstd(compiler)]
             }
             Source::Libstd { compiler } => {
-                vec![self.compiler_rt(()),
-                     self.rustc(compiler.stage).target(compiler.host)]
+                vec![self.rustc(compiler.stage).target(compiler.host)]
             }
             Source::LibrustcLink { compiler, host } => {
                 vec![self.librustc(compiler),
@@ -349,7 +346,6 @@ impl<'a> Step<'a> {
                 vec![self.libstd(compiler),
                      self.target(host).rustc(compiler.stage)]
             }
-            Source::CompilerRt { _dummy } => Vec::new(),
             Source::Llvm { _dummy } => Vec::new(),
             Source::TestHelpers { _dummy } => Vec::new(),
             Source::DebuggerScripts { stage: _ } => Vec::new(),
@@ -366,8 +362,7 @@ impl<'a> Step<'a> {
                 vec![self.libtest(compiler)]
             }
             Source::DocBook { stage } |
-            Source::DocNomicon { stage } |
-            Source::DocStyle { stage } => {
+            Source::DocNomicon { stage } => {
                 vec![self.target(&build.config.build).tool_rustbook(stage)]
             }
             Source::DocErrorIndex { stage } => {
@@ -382,8 +377,7 @@ impl<'a> Step<'a> {
             Source::Doc { stage } => {
                 let mut deps = vec![
                     self.doc_book(stage), self.doc_nomicon(stage),
-                    self.doc_style(stage), self.doc_standalone(stage),
-                    self.doc_std(stage),
+                    self.doc_standalone(stage), self.doc_std(stage),
                     self.doc_error_index(stage),
                 ];
 

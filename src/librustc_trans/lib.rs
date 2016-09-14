@@ -27,6 +27,7 @@
 #![feature(box_syntax)]
 #![feature(const_fn)]
 #![feature(custom_attribute)]
+#![feature(dotdot_in_tuple_patterns)]
 #![allow(unused_attributes)]
 #![feature(libc)]
 #![feature(quote)]
@@ -98,8 +99,10 @@ mod cabi_aarch64;
 mod cabi_arm;
 mod cabi_asmjs;
 mod cabi_mips;
+mod cabi_mips64;
 mod cabi_powerpc;
 mod cabi_powerpc64;
+mod cabi_s390x;
 mod cabi_x86;
 mod cabi_x86_64;
 mod cabi_x86_win64;
@@ -110,17 +113,12 @@ mod collector;
 mod common;
 mod consts;
 mod context;
-mod controlflow;
-mod datum;
 mod debuginfo;
 mod declare;
 mod disr;
-mod expr;
 mod glue;
-mod inline;
 mod intrinsic;
 mod machine;
-mod _match;
 mod meth;
 mod mir;
 mod monomorphize;

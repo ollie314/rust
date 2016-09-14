@@ -10,7 +10,6 @@
 
 #![deny(warnings)]
 
-#![feature(as_unsafe_cell)]
 #![feature(borrow_state)]
 #![feature(box_syntax)]
 #![feature(cell_extras)]
@@ -33,6 +32,8 @@
 #![feature(try_from)]
 #![feature(unicode)]
 #![feature(unique)]
+#![feature(iter_max_by)]
+#![feature(iter_min_by)]
 
 extern crate core;
 extern crate test;

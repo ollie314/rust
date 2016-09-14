@@ -26,7 +26,6 @@
 
 #![feature(associated_consts)]
 #![feature(const_fn)]
-#![feature(filling_drop)]
 #![feature(libc)]
 #![feature(rustc_private)]
 #![feature(staged_api)]
@@ -105,6 +104,7 @@ pub mod abi;
 pub mod ast;
 pub mod attr;
 pub mod codemap;
+#[macro_use]
 pub mod config;
 pub mod entry;
 pub mod feature_gate;
@@ -127,6 +127,7 @@ pub mod ext {
     pub mod base;
     pub mod build;
     pub mod expand;
+    pub mod placeholders;
     pub mod hygiene;
     pub mod proc_macro_shim;
     pub mod quote;

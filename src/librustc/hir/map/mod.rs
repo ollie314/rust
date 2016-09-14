@@ -315,8 +315,7 @@ impl<'ast> Map<'ast> {
                     RootInlinedParent(parent) => match *parent {
                         InlinedItem::Item(def_id, _) |
                         InlinedItem::TraitItem(def_id, _) |
-                        InlinedItem::ImplItem(def_id, _) |
-                        InlinedItem::Foreign(def_id, _) =>
+                        InlinedItem::ImplItem(def_id, _) =>
                             return DepNode::MetaData(def_id)
                     },
 
@@ -566,6 +565,13 @@ impl<'ast> Map<'ast> {
         match self.find(id) { // read recorded by `find`
             Some(NodeItem(item)) => item,
             _ => bug!("expected item, found {}", self.node_to_string(id))
+        }
+    }
+
+    pub fn expect_impl_item(&self, id: NodeId) -> &'ast ImplItem {
+        match self.find(id) {
+            Some(NodeImplItem(item)) => item,
+            _ => bug!("expected impl item, found {}", self.node_to_string(id))
         }
     }
 
@@ -921,6 +927,8 @@ pub fn map_decoded_item<'ast, F: FoldOps>(map: &Map<'ast>,
                                           ii: InlinedItem,
                                           fold_ops: F)
                                           -> &'ast InlinedItem {
+    let _ignore = map.forest.dep_graph.in_ignore();
+
     let mut fld = IdAndSpanUpdater::new(fold_ops);
     let ii = match ii {
         II::Item(d, i) => II::Item(fld.fold_ops.new_def_id(d),
@@ -933,8 +941,6 @@ pub fn map_decoded_item<'ast, F: FoldOps>(map: &Map<'ast>,
             II::ImplItem(fld.fold_ops.new_def_id(d),
                          ii.map(|ii| fld.fold_impl_item(ii)))
         }
-        II::Foreign(d, i) => II::Foreign(fld.fold_ops.new_def_id(d),
-                                         i.map(|i| fld.fold_foreign_item(i)))
     };
 
     let ii = map.forest.inlined_items.alloc(ii);
@@ -1026,6 +1032,7 @@ fn node_id_to_string(map: &Map, id: NodeId, include_id: bool) -> String {
                 ItemTy(..) => "ty",
                 ItemEnum(..) => "enum",
                 ItemStruct(..) => "struct",
+                ItemUnion(..) => "union",
                 ItemTrait(..) => "trait",
                 ItemImpl(..) => "impl",
                 ItemDefaultImpl(..) => "default impl",

@@ -19,9 +19,12 @@
       html_root_url = "https://doc.rust-lang.org/nightly/")]
 #![cfg_attr(not(stage0), deny(warnings))]
 
+#![feature(dotdot_in_tuple_patterns)]
 #![feature(question_mark)]
 #![feature(rustc_private)]
 #![feature(staged_api)]
+#![feature(rand)]
+#![feature(core_intrinsics)]
 
 extern crate graphviz;
 extern crate rbml;
@@ -38,9 +41,11 @@ mod calculate_svh;
 mod persist;
 
 pub use assert_dep_graph::assert_dep_graph;
-pub use calculate_svh::SvhCalculate;
+pub use calculate_svh::compute_incremental_hashes_map;
+pub use calculate_svh::IncrementalHashesMap;
 pub use persist::load_dep_graph;
 pub use persist::save_dep_graph;
 pub use persist::save_trans_partition;
 pub use persist::save_work_products;
 pub use persist::in_incr_comp_dir;
+pub use persist::finalize_session_directory;

@@ -16,9 +16,9 @@ use rustc::infer::TypeOrigin;
 use rustc::ty::subst::Substs;
 use rustc::ty::FnSig;
 use rustc::ty::{self, Ty};
+use rustc::util::nodemap::FnvHashMap;
 use {CrateCtxt, require_same_types};
 
-use std::collections::{HashMap};
 use syntax::abi::Abi;
 use syntax::ast;
 use syntax::parse::token;
@@ -37,7 +37,7 @@ fn equate_intrinsic_type<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
     let i_ty = tcx.lookup_item_type(def_id);
 
     let substs = Substs::for_item(tcx, def_id,
-                                  |_, _| ty::ReErased,
+                                  |_, _| tcx.mk_region(ty::ReErased),
                                   |def, _| tcx.mk_param_from_def(def));
 
     let fty = tcx.mk_fn_def(def_id, substs, tcx.mk_bare_fn(ty::BareFnTy {
@@ -51,12 +51,17 @@ fn equate_intrinsic_type<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
     }));
     let i_n_tps = i_ty.generics.types.len();
     if i_n_tps != n_tps {
-        struct_span_err!(tcx.sess, it.span, E0094,
-            "intrinsic has wrong number of type \
-             parameters: found {}, expected {}",
-             i_n_tps, n_tps)
-             .span_label(it.span, &format!("expected {} type parameter", n_tps))
-             .emit();
+        let span = match it.node {
+            hir::ForeignItemFn(_, ref generics) => generics.span,
+            hir::ForeignItemStatic(..) => it.span
+        };
+
+        struct_span_err!(tcx.sess, span, E0094,
+                        "intrinsic has wrong number of type \
+                        parameters: found {}, expected {}",
+                        i_n_tps, n_tps)
+            .span_label(span, &format!("expected {} type parameter", n_tps))
+            .emit();
     } else {
         require_same_types(ccx,
                            TypeOrigin::IntrinsicType(it.span),
@@ -122,7 +127,7 @@ pub fn check_intrinsic_type(ccx: &CrateCtxt, it: &hir::ForeignItem) {
                  ], ccx.tcx.types.usize)
             }
             "rustc_peek" => (1, vec![param(ccx, 0)], param(ccx, 0)),
-            "init" | "init_dropped" => (1, Vec::new(), param(ccx, 0)),
+            "init" => (1, Vec::new(), param(ccx, 0)),
             "uninit" => (1, Vec::new(), param(ccx, 0)),
             "forget" => (1, vec!( param(ccx, 0) ), tcx.mk_nil()),
             "transmute" => (2, vec!( param(ccx, 0) ), param(ccx, 1)),
@@ -280,6 +285,8 @@ pub fn check_intrinsic_type(ccx: &CrateCtxt, it: &hir::ForeignItem) {
                 (1, vec![param(ccx, 0), param(ccx, 0)], param(ccx, 0)),
 
             "assume" => (0, vec![tcx.types.bool], tcx.mk_nil()),
+            "likely" => (0, vec![tcx.types.bool], tcx.types.bool),
+            "unlikely" => (0, vec![tcx.types.bool], tcx.types.bool),
 
             "discriminant_value" => (1, vec![
                     tcx.mk_imm_ref(tcx.mk_region(ty::ReLateBound(ty::DebruijnIndex::new(1),
@@ -301,8 +308,11 @@ pub fn check_intrinsic_type(ccx: &CrateCtxt, it: &hir::ForeignItem) {
             }
 
             ref other => {
-                span_err!(tcx.sess, it.span, E0093,
-                          "unrecognized intrinsic function: `{}`", *other);
+                struct_span_err!(tcx.sess, it.span, E0093,
+                                "unrecognized intrinsic function: `{}`",
+                                *other)
+                                .span_label(it.span, &format!("unrecognized intrinsic"))
+                                .emit();
                 return;
             }
         };
@@ -362,7 +372,7 @@ pub fn check_platform_intrinsic_type(ccx: &CrateCtxt,
                         return
                     }
 
-                    let mut structural_to_nomimal = HashMap::new();
+                    let mut structural_to_nomimal = FnvHashMap();
 
                     let sig = tcx.no_late_bound_regions(i_ty.ty.fn_sig()).unwrap();
                     if intr.inputs.len() != sig.inputs.len() {
@@ -402,7 +412,7 @@ fn match_intrinsic_type_to_type<'tcx, 'a>(
         ccx: &CrateCtxt<'a, 'tcx>,
         position: &str,
         span: Span,
-        structural_to_nominal: &mut HashMap<&'a intrinsics::Type, ty::Ty<'tcx>>,
+        structural_to_nominal: &mut FnvHashMap<&'a intrinsics::Type, ty::Ty<'tcx>>,
         expected: &'a intrinsics::Type, t: ty::Ty<'tcx>)
 {
     use intrinsics::Type::*;
