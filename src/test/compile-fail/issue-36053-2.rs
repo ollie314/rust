@@ -1,4 +1,4 @@
-// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,14 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// Test that we generate obsolete syntax errors around usages of closure kinds: `|:|`, `|&:|` and
-// `|&mut:|`.
+// Regression test for #36053. ICE was caused due to obligations
+// being added to a special, dedicated fulfillment cx during
+// a probe.
 
+use std::iter::once;
 fn main() {
-    let a = |:| {};  //~ ERROR obsolete syntax: `:`, `&mut:`, or `&:`
-    let a = |&:| {};  //~ ERROR obsolete syntax: `:`, `&mut:`, or `&:`
-    let a = |&mut:| {};  //~ ERROR obsolete syntax: `:`, `&mut:`, or `&:`
+    once::<&str>("str").fuse().filter(|a: &str| true).count();
+    //~^ ERROR no method named `count`
+    //~| ERROR E0281
+    //~| ERROR E0281
 }

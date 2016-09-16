@@ -1846,7 +1846,7 @@ fn item_module(w: &mut fmt::Formatter, cx: &Context,
                        <tr class='{stab} module-item'>
                            <td><a class='{class}' href='{href}'
                                   title='{title}'>{name}</a></td>
-                           <td class='docblock short'>
+                           <td class='docblock-short'>
                                {stab_docs} {docs}
                            </td>
                        </tr>",
@@ -2546,7 +2546,7 @@ fn render_struct(w: &mut fmt::Formatter, it: &clean::Item,
             }
             write!(w, "}}")?;
         }
-        doctree::Tuple | doctree::Newtype => {
+        doctree::Tuple => {
             write!(w, "(")?;
             for (i, field) in fields.iter().enumerate() {
                 if i > 0 {
