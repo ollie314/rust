@@ -8,10 +8,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use ast;
+use {ast, attr};
 use syntax_pos::{Span, DUMMY_SP};
-use ext::base::{DummyResult, ExtCtxt, MacResult, SyntaxExtension};
-use ext::base::{NormalTT, TTMacroExpander};
+use ext::base::{DummyResult, ExtCtxt, MacEager, MacResult, SyntaxExtension};
+use ext::base::{IdentMacroExpander, NormalTT, TTMacroExpander};
+use ext::placeholders;
 use ext::tt::macro_parser::{Success, Error, Failure};
 use ext::tt::macro_parser::{MatchedSeq, MatchedNonterminal};
 use ext::tt::macro_parser::parse;
@@ -48,22 +49,19 @@ impl<'a> ParserAnyMacro<'a> {
     /// allowed to be there.
     fn ensure_complete_parse(&self, allow_semi: bool, context: &str) {
         let mut parser = self.parser.borrow_mut();
-        if allow_semi && parser.token == token::Semi {
-            parser.bump();
-        }
-        if parser.token != token::Eof {
+        parser.ensure_complete_parse(allow_semi, |parser| {
             let token_str = parser.this_token_to_string();
             let msg = format!("macro expansion ignores token `{}` and any \
                                following",
                               token_str);
             let span = parser.span;
-            let mut err = parser.diagnostic().struct_span_err(span, &msg[..]);
+            let mut err = parser.diagnostic().struct_span_err(span, &msg);
             let msg = format!("caused by the macro expansion here; the usage \
                                of `{}!` is likely invalid in {} context",
                                self.macro_ident, context);
-            err.span_note(self.site_span, &msg[..])
+            err.span_note(self.site_span, &msg)
                .emit();
-        }
+        });
     }
 }
 
@@ -240,6 +238,38 @@ fn generic_extension<'cx>(cx: &'cx ExtCtxt,
     }
 
      cx.span_fatal(best_fail_spot.substitute_dummy(sp), &best_fail_msg[..]);
+}
+
+pub struct MacroRulesExpander;
+impl IdentMacroExpander for MacroRulesExpander {
+    fn expand(&self,
+              cx: &mut ExtCtxt,
+              span: Span,
+              ident: ast::Ident,
+              tts: Vec<tokenstream::TokenTree>,
+              attrs: Vec<ast::Attribute>)
+              -> Box<MacResult> {
+        let def = ast::MacroDef {
+            ident: ident,
+            id: ast::DUMMY_NODE_ID,
+            span: span,
+            imported_from: None,
+            use_locally: true,
+            body: tts,
+            export: attr::contains_name(&attrs, "macro_export"),
+            allow_internal_unstable: attr::contains_name(&attrs, "allow_internal_unstable"),
+            attrs: attrs,
+        };
+
+        cx.insert_macro(def.clone());
+
+        // If keep_macs is true, expands to a MacEager::items instead.
+        if cx.ecfg.keep_macs {
+            MacEager::items(placeholders::reconstructed_macro_rules(&def).make_items())
+        } else {
+            MacEager::items(placeholders::macro_scope_placeholder().make_items())
+        }
+    }
 }
 
 // Note that macro-by-example's input is also matched against a token tree:

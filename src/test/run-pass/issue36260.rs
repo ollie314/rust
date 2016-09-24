@@ -1,4 +1,4 @@
-// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2012-2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,10 +8,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct Simba {
-    mother: u32,
+// Make sure this compiles without getting a linker error because of missing
+// drop-glue because the collector missed adding drop-glue for the closure:
+
+fn create_fn() -> Box<Fn()> {
+    let text = String::new();
+
+    Box::new(move || { let _ = &text; })
 }
 
 fn main() {
-    let s = Simba { mother: 1, father: 0 }; //~ ERROR E0560
+    let _ = create_fn();
 }

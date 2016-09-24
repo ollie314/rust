@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2016 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,11 +8,18 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-// aux-build:macro_crate_MacroRulesTT.rs
-// ignore-stage1
-// error-pattern: plugin tried to register a new MacroRulesTT
+// rustc-env:RUST_NEW_ERROR_FORMAT
 
-#![feature(plugin)]
-#![plugin(macro_crate_MacroRulesTT)]
+trait Parser<T> {
+    fn parse(text: &str) -> Option<T>;
+}
 
-fn main() { }
+impl<bool> Parser<bool> for bool {
+    fn parse(text: &str) -> Option<bool> {
+        Some(true)
+    }
+}
+
+fn main() {
+    println!("{}", bool::parse("ok").unwrap_or(false));
+}
