@@ -903,7 +903,7 @@ fn report_forbidden_specialization<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let mut err = struct_span_err!(
         tcx.sess, impl_item.span, E0520,
         "`{}` specializes an item from a parent `impl`, but \
-         neither that item nor the `impl` are marked `default`",
+         that item is not marked `default`",
         impl_item.name);
     err.span_label(impl_item.span, &format!("cannot specialize default item `{}`",
                                             impl_item.name));
@@ -911,8 +911,7 @@ fn report_forbidden_specialization<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     match tcx.span_of_impl(parent_impl) {
         Ok(span) => {
             err.span_label(span, &"parent `impl` is here");
-            err.note(&format!("to specialize, either the parent `impl` or `{}` \
-                               in the parent `impl` must be marked `default`",
+            err.note(&format!("to specialize, `{}` in the parent `impl` must be marked `default`",
                               impl_item.name));
         }
         Err(cname) => {
@@ -1526,9 +1525,11 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         match self.locals.borrow().get(&nid) {
             Some(&t) => t,
             None => {
-                span_err!(self.tcx.sess, span, E0513,
-                          "no type for local variable {}",
-                          nid);
+                struct_span_err!(self.tcx.sess, span, E0513,
+                                 "no type for local variable {}",
+                                 self.tcx.map.node_to_string(nid))
+                    .span_label(span, &"no type for variable")
+                    .emit();
                 self.tcx.types.err
             }
         }
@@ -3256,7 +3257,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         if let Some((def_id, variant)) = variant {
             if variant.kind == ty::VariantKind::Tuple &&
                     !self.tcx.sess.features.borrow().relaxed_adts {
-                emit_feature_err(&self.tcx.sess.parse_sess.span_diagnostic,
+                emit_feature_err(&self.tcx.sess.parse_sess,
                                  "relaxed_adts", span, GateIssue::Language,
                                  "tuple structs and variants in struct patterns are unstable");
             }

@@ -243,7 +243,14 @@ impl Build {
         // Almost all of these are simple one-liners that shell out to the
         // corresponding functionality in the extra modules, where more
         // documentation can be found.
-        for target in step::all(self) {
+        let steps = step::all(self);
+
+        self.verbose("bootstrap build plan:");
+        for step in &steps {
+            self.verbose(&format!("{:?}", step));
+        }
+
+        for target in steps {
             let doc_out = self.out.join(&target.target).join("doc");
             match target.src {
                 Llvm { _dummy } => {
@@ -950,7 +957,11 @@ impl Build {
     /// Returns the path to the C++ compiler for the target specified, may panic
     /// if no C++ compiler was configured for the target.
     fn cxx(&self, target: &str) -> &Path {
-        self.cxx[target].path()
+        match self.cxx.get(target) {
+            Some(p) => p.path(),
+            None => panic!("\n\ntarget `{}` is not configured as a host,
+                            only as a target\n\n", target),
+        }
     }
 
     /// Returns flags to pass to the compiler to generate code for `target`.
