@@ -1264,15 +1264,13 @@ pub trait BufRead: Read {
     #[stable(feature = "rust1", since = "1.0.0")]
     fn consume(&mut self, amt: usize);
 
-    /// Read all bytes into `buf` until the delimiter `byte` is reached.
+    /// Read all bytes into `buf` until the delimiter `byte` or EOF is reached.
     ///
     /// This function will read bytes from the underlying stream until the
     /// delimiter or EOF is found. Once found, all bytes up to, and including,
     /// the delimiter (if found) will be appended to `buf`.
     ///
-    /// If this reader is currently at EOF then this function will not modify
-    /// `buf` and will return `Ok(n)` where `n` is the number of bytes which
-    /// were read.
+    /// If successful, this function will return the total number of bytes read.
     ///
     /// # Errors
     ///
@@ -1315,9 +1313,7 @@ pub trait BufRead: Read {
     /// up to, and including, the delimiter (if found) will be appended to
     /// `buf`.
     ///
-    /// If this reader is currently at EOF then this function will not modify
-    /// `buf` and will return `Ok(n)` where `n` is the number of bytes which
-    /// were read.
+    /// If successful, this function will return the total number of bytes read.
     ///
     /// # Errors
     ///
@@ -1761,6 +1757,7 @@ mod tests {
     use super::repeat;
 
     #[test]
+    #[cfg_attr(target_os = "emscripten", ignore)]
     fn read_until() {
         let mut buf = Cursor::new(&b"12"[..]);
         let mut v = Vec::new();
@@ -1971,6 +1968,7 @@ mod tests {
     }
 
     #[bench]
+    #[cfg_attr(target_os = "emscripten", ignore)]
     fn bench_read_to_end(b: &mut test::Bencher) {
         b.iter(|| {
             let mut lr = repeat(1).take(10000000);
