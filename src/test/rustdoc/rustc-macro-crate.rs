@@ -8,34 +8,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(rustc_attrs)]
-#![allow(warnings)]
+// no-prefer-dynamic
 
-macro_rules! foo { () => {
-    let x = 1;
-    macro_rules! bar { () => {x} }
-    let _ = bar!();
-}}
+#![feature(rustc_macro)]
+#![feature(rustc_macro_lib)]
+#![crate_type = "rustc-macro"]
 
-macro_rules! m { // test issue #31856
-    ($n:ident) => (
-        let a = 1;
-        let $n = a;
-    )
-}
+extern crate rustc_macro;
 
-macro_rules! baz {
-    ($i:ident) => {
-        let mut $i = 2;
-        $i = $i + 1;
-    }
-}
+use rustc_macro::TokenStream;
 
-#[rustc_error]
-fn main() { //~ ERROR compilation successful
-    foo! {};
-    bar! {};
-
-    let mut a = true;
-    baz!(a);
+#[rustc_macro_derive(Foo)]
+pub fn foo(input: TokenStream) -> TokenStream {
+    input
 }

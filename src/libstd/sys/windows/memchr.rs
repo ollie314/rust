@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -7,15 +7,9 @@
 // <LICENSE-MIT or http://opensource.org/licenses/MIT>, at your
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
+//
+// Original implementation taken from rust-memchr
+// Copyright 2015 Andrew Gallant, bluss and Nicolas Koch
 
-#![feature(unboxed_closures)]
-
-trait Trait {}
-
-fn f<F:Trait(isize) -> isize>(x: F) {}
-//~^ ERROR E0244
-//~| NOTE expected no type arguments, found 1
-//~| ERROR E0220
-//~| NOTE associated type `Output` not found
-
-fn main() {}
+// Fallback memchr is fastest on windows
+pub use sys_common::memchr::fallback::{memchr, memrchr};

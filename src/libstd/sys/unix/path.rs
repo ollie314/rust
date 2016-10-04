@@ -1,4 +1,4 @@
-// Copyright 2014 The Rust Project Developers. See the COPYRIGHT
+// Copyright 2015 The Rust Project Developers. See the COPYRIGHT
 // file at the top-level directory of this distribution and at
 // http://rust-lang.org/COPYRIGHT.
 //
@@ -8,14 +8,22 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(unboxed_closures)]
+use path::Prefix;
+use ffi::OsStr;
 
-trait Trait {}
+#[inline]
+pub fn is_sep_byte(b: u8) -> bool {
+    b == b'/'
+}
 
-fn f<F:Trait(isize) -> isize>(x: F) {}
-//~^ ERROR E0244
-//~| NOTE expected no type arguments, found 1
-//~| ERROR E0220
-//~| NOTE associated type `Output` not found
+#[inline]
+pub fn is_verbatim_sep(b: u8) -> bool {
+    b == b'/'
+}
 
-fn main() {}
+pub fn parse_prefix(_: &OsStr) -> Option<Prefix> {
+    None
+}
+
+pub const MAIN_SEP_STR: &'static str = "/";
+pub const MAIN_SEP: char = '/';
