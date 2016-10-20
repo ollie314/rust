@@ -156,13 +156,10 @@ impl<'a,'tcx> CrateCtxt<'a,'tcx> {
     {
         {
             let mut stack = self.stack.borrow_mut();
-            match stack.iter().enumerate().rev().find(|&(_, r)| *r == request) {
-                None => { }
-                Some((i, _)) => {
-                    let cycle = &stack[i..];
-                    self.report_cycle(span, cycle);
-                    return Err(ErrorReported);
-                }
+            if let Some((i, _)) = stack.iter().enumerate().rev().find(|&(_, r)| *r == request) {
+                let cycle = &stack[i..];
+                self.report_cycle(span, cycle);
+                return Err(ErrorReported);
             }
             stack.push(request);
         }
@@ -1482,6 +1479,7 @@ fn generics_of_def_id<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
                             default_def_id: tcx.map.local_def_id(parent),
                             default: None,
                             object_lifetime_default: ty::ObjectLifetimeDefault::BaseDefault,
+                            pure_wrt_drop: false,
                         };
                         tcx.ty_param_defs.borrow_mut().insert(param_id, def.clone());
                         opt_self = Some(def);
@@ -1526,7 +1524,8 @@ fn generics_of_def_id<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
                 def_id: tcx.map.local_def_id(l.lifetime.id),
                 bounds: l.bounds.iter().map(|l| {
                     ast_region_to_region(tcx, l)
-                }).collect()
+                }).collect(),
+                pure_wrt_drop: l.pure_wrt_drop,
             }
         }).collect::<Vec<_>>();
 
@@ -1926,6 +1925,7 @@ fn get_or_create_type_parameter_def<'a,'tcx>(ccx: &CrateCtxt<'a,'tcx>,
         default_def_id: ccx.tcx.map.local_def_id(parent),
         default: default,
         object_lifetime_default: object_lifetime_default,
+        pure_wrt_drop: param.pure_wrt_drop,
     };
 
     if def.name == keywords::SelfType.name() {
