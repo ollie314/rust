@@ -24,6 +24,7 @@ use hir::def::{Def, CtorKind, PathResolution, ExportMap};
 use hir::def_id::{CrateNum, DefId, CRATE_DEF_INDEX, LOCAL_CRATE};
 use middle::lang_items::{FnTraitLangItem, FnMutTraitLangItem, FnOnceTraitLangItem};
 use middle::region::{CodeExtent, ROOT_CODE_EXTENT};
+use mir::Mir;
 use traits;
 use ty;
 use ty::subst::{Subst, Substs};
@@ -34,13 +35,14 @@ use util::nodemap::FnvHashMap;
 
 use serialize::{self, Encodable, Encoder};
 use std::borrow::Cow;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, RefCell, Ref};
 use std::hash::{Hash, Hasher};
 use std::iter;
 use std::ops::Deref;
 use std::rc::Rc;
 use std::slice;
 use std::vec::IntoIter;
+use std::mem;
 use syntax::ast::{self, Name, NodeId};
 use syntax::attr;
 use syntax::parse::token::{self, InternedString};
@@ -560,6 +562,14 @@ impl<'a, T> IntoIterator for &'a Slice<T> {
 }
 
 impl<'tcx> serialize::UseSpecializedDecodable for &'tcx Slice<Ty<'tcx>> {}
+
+impl<T> Slice<T> {
+    pub fn empty<'a>() -> &'a Slice<T> {
+        unsafe {
+            mem::transmute(slice::from_raw_parts(0x1 as *const T, 0))
+        }
+    }
+}
 
 /// Upvars do not get their own node-id. Instead, we use the pair of
 /// the original var id (that is, the root variable that is referenced
@@ -1689,7 +1699,7 @@ impl<'a, 'gcx, 'tcx, 'container> AdtDefData<'gcx, 'container> {
         match def {
             Def::Variant(vid) | Def::VariantCtor(vid, ..) => self.variant_with_id(vid),
             Def::Struct(..) | Def::StructCtor(..) | Def::Union(..) |
-            Def::TyAlias(..) | Def::AssociatedTy(..) => self.struct_variant(),
+            Def::TyAlias(..) | Def::AssociatedTy(..) | Def::SelfTy(..) => self.struct_variant(),
             _ => bug!("unexpected def {:?} in variant_of_def", def)
         }
     }
@@ -1798,7 +1808,7 @@ impl<'a, 'tcx> AdtDefData<'tcx, 'tcx> {
             _ if tys.references_error() => tcx.types.err,
             0 => tcx.types.bool,
             1 => tys[0],
-            _ => tcx.mk_tup(&tys)
+            _ => tcx.intern_tup(&tys[..])
         };
 
         match self.sized_constraint.get(dep_node()) {
@@ -1874,7 +1884,7 @@ impl<'a, 'tcx> AdtDefData<'tcx, 'tcx> {
                 };
                 let sized_predicate = Binder(TraitRef {
                     def_id: sized_trait,
-                    substs: Substs::new_trait(tcx, ty, &[])
+                    substs: tcx.mk_substs_trait(ty, &[])
                 }).to_predicate();
                 let predicates = tcx.lookup_predicates(self.did).predicates;
                 if predicates.into_iter().any(|p| p == sized_predicate) {
@@ -2125,7 +2135,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
     pub fn node_id_item_substs(self, id: NodeId) -> ItemSubsts<'gcx> {
         match self.tables.borrow().item_substs.get(&id) {
             None => ItemSubsts {
-                substs: Substs::empty(self.global_tcx())
+                substs: self.global_tcx().intern_substs(&[])
             },
             Some(ts) => ts.clone(),
         }
@@ -2510,6 +2520,19 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             || self.sess.cstore.item_super_predicates(self.global_tcx(), did))
     }
 
+    /// Given the did of an item, returns its MIR, borrowed immutably.
+    pub fn item_mir(self, did: DefId) -> Ref<'gcx, Mir<'gcx>> {
+        lookup_locally_or_in_crate_store("mir_map", did, &self.mir_map, || {
+            let mir = self.sess.cstore.get_item_mir(self.global_tcx(), did);
+            let mir = self.alloc_mir(mir);
+
+            // Perma-borrow MIR from extern crates to prevent mutation.
+            mem::forget(mir.borrow());
+
+            mir
+        }).borrow()
+    }
+
     /// If `type_needs_drop` returns true, then `ty` is definitely
     /// non-copy and *might* have a destructor attached; if it returns
     /// false, then `ty` definitely has no destructor (i.e. no drop glue).
@@ -2797,7 +2820,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         // regions, so it shouldn't matter what we use for the free id
         let free_id_outlive = self.region_maps.node_extent(ast::DUMMY_NODE_ID);
         ty::ParameterEnvironment {
-            free_substs: Substs::empty(self),
+            free_substs: self.intern_substs(&[]),
             caller_bounds: Vec::new(),
             implicit_region_bound: self.mk_region(ty::ReEmpty),
             free_id_outlive: free_id_outlive,

@@ -21,7 +21,7 @@ use rustc_const_eval as const_eval;
 use rustc::middle::region::CodeExtent;
 use rustc::ty::{self, AdtKind, VariantDef, Ty};
 use rustc::ty::cast::CastKind as TyCastKind;
-use rustc::mir::repr::*;
+use rustc::mir::*;
 use rustc::hir;
 use syntax::ptr::P;
 
@@ -657,7 +657,7 @@ fn to_borrow_kind(m: hir::Mutability) -> BorrowKind {
 fn convert_arm<'a, 'gcx, 'tcx>(cx: &mut Cx<'a, 'gcx, 'tcx>,
                                arm: &'tcx hir::Arm) -> Arm<'tcx> {
     Arm {
-        patterns: arm.pats.iter().map(|p| cx.refutable_pat(p)).collect(),
+        patterns: arm.pats.iter().map(|p| Pattern::from_hir(cx.tcx, p)).collect(),
         guard: arm.guard.to_ref(),
         body: arm.body.to_ref(),
     }

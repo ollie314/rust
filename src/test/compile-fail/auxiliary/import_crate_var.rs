@@ -8,30 +8,5 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-struct S;
-
-trait Tr {
-    type A;
-}
-
-impl Tr for S {
-    type A = S;
-}
-
-fn f<T: Tr>() {
-    match S {
-        T::A {} => {} //~ ERROR `T::A` does not name a struct or a struct variant
-    }
-}
-
-fn g<T: Tr<A = S>>() {
-    match S {
-        T::A {} => {} //~ ERROR `T::A` does not name a struct or a struct variant
-    }
-}
-
-fn main() {
-    match S {
-        S::A {} => {} //~ ERROR ambiguous associated type
-    }
-}
+#[macro_export]
+macro_rules! m { () => { use $crate; } }

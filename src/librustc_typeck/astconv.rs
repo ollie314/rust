@@ -635,9 +635,9 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
     {
         let anon_scope = rscope.anon_type_scope();
         let binding_rscope = MaybeWithAnonTypes::new(BindingRscope::new(), anon_scope);
-        let inputs: Vec<_> = data.inputs.iter().map(|a_t| {
+        let inputs = self.tcx().mk_type_list(data.inputs.iter().map(|a_t| {
             self.ast_ty_arg_to_ty(&binding_rscope, None, region_substs, a_t)
-        }).collect();
+        }));
         let inputs_len = inputs.len();
         let input_params = || vec![String::new(); inputs_len];
         let implied_output_region = self.find_implied_output_region(&inputs, input_params);
@@ -660,7 +660,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
             span: output_span
         };
 
-        (self.tcx().mk_tup(&inputs), output_binding)
+        (self.tcx().mk_ty(ty::TyTuple(inputs)), output_binding)
     }
 
     pub fn instantiate_poly_trait_ref(&self,
@@ -1261,6 +1261,18 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
         }
 
         if bounds.len() > 1 {
+            let spans = bounds.iter().map(|b| {
+                self.tcx().impl_or_trait_items(b.def_id()).iter()
+                .find(|&&def_id| {
+                    match self.tcx().impl_or_trait_item(def_id) {
+                        ty::TypeTraitItem(ref item) => item.name.as_str() == assoc_name,
+                        _ => false
+                    }
+                })
+                .and_then(|&def_id| self.tcx().map.as_local_node_id(def_id))
+                .and_then(|node_id| self.tcx().map.opt_span(node_id))
+            });
+
             let mut err = struct_span_err!(
                 self.tcx().sess, span, E0221,
                 "ambiguous associated type `{}` in bounds of `{}`",
@@ -1268,11 +1280,17 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                 ty_param_name);
             err.span_label(span, &format!("ambiguous associated type `{}`", assoc_name));
 
-            for bound in &bounds {
-                span_note!(&mut err, span,
-                           "associated type `{}` could derive from `{}`",
-                           ty_param_name,
-                           bound);
+            for span_and_bound in spans.zip(&bounds) {
+                if let Some(span) = span_and_bound.0 {
+                    err.span_label(span, &format!("ambiguous `{}` from `{}`",
+                                                  assoc_name,
+                                                  span_and_bound.1));
+                } else {
+                    span_note!(&mut err, span,
+                               "associated type `{}` could derive from `{}`",
+                               ty_param_name,
+                               span_and_bound.1);
+                }
             }
             err.emit();
         }
@@ -1466,7 +1484,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                       def: Def,
                       opt_self_ty: Option<Ty<'tcx>>,
                       base_path_ref_id: ast::NodeId,
-                      base_segments: &[hir::PathSegment])
+                      base_segments: &[hir::PathSegment],
+                      permit_variants: bool)
                       -> Ty<'tcx> {
         let tcx = self.tcx();
 
@@ -1495,6 +1514,16 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                                     span,
                                     param_mode,
                                     did,
+                                    base_segments.last().unwrap())
+            }
+            Def::Variant(did) if permit_variants => {
+                // Convert "variant type" as if it were a real type.
+                // The resulting `Ty` is type of the variant's enum for now.
+                tcx.prohibit_type_params(base_segments.split_last().unwrap().1);
+                self.ast_path_to_ty(rscope,
+                                    span,
+                                    param_mode,
+                                    tcx.parent_def_id(did).unwrap(),
                                     base_segments.last().unwrap())
             }
             Def::TyParam(did) => {
@@ -1586,7 +1615,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                                       opt_self_ty: Option<Ty<'tcx>>,
                                       base_path_ref_id: ast::NodeId,
                                       base_segments: &[hir::PathSegment],
-                                      assoc_segments: &[hir::PathSegment])
+                                      assoc_segments: &[hir::PathSegment],
+                                      permit_variants: bool)
                                       -> (Ty<'tcx>, Def) {
         // Convert the base type.
         debug!("finish_resolving_def_to_ty(base_def={:?}, \
@@ -1601,7 +1631,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                                           base_def,
                                           opt_self_ty,
                                           base_path_ref_id,
-                                          base_segments);
+                                          base_segments,
+                                          permit_variants);
         debug!("finish_resolving_def_to_ty: base_def_to_ty returned {:?}", base_ty);
 
         // If any associated type segments remain, attempt to resolve them.
@@ -1660,10 +1691,7 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                 tcx.types.never
             },
             hir::TyTup(ref fields) => {
-                let flds = fields.iter()
-                                 .map(|t| self.ast_ty_to_ty(rscope, &t))
-                                 .collect::<Vec<_>>();
-                tcx.mk_tup(&flds)
+                tcx.mk_tup(fields.iter().map(|t| self.ast_ty_to_ty(rscope, &t)))
             }
             hir::TyBareFn(ref bf) => {
                 require_c_abi_if_variadic(tcx, &bf.decl, bf.abi, ast_ty.span);
@@ -1760,7 +1788,8 @@ impl<'o, 'gcx: 'tcx, 'tcx> AstConv<'gcx, 'tcx>+'o {
                                                                 opt_self_ty,
                                                                 ast_ty.id,
                                                                 &path.segments[..base_ty_end],
-                                                                &path.segments[base_ty_end..]);
+                                                                &path.segments[base_ty_end..],
+                                                                false);
 
                 // Write back the new resolution.
                 if path_res.depth != 0 {

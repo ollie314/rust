@@ -153,7 +153,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
         // What could go wrong...?
         if spans.len() < path.segments.len() {
             if generated_code(path.span) {
-                return vec!();
+                return vec![];
             }
             error!("Mis-calculated spans for path '{}'. Found {} spans, expected {}. Found spans:",
                    path_to_string(path),
@@ -166,12 +166,13 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
                        loc.file.name,
                        loc.line);
             }
-            return vec!();
+            error!("    master span: {:?}: `{}`", path.span, self.span.snippet(path.span));
+            return vec![];
         }
 
-        let mut result: Vec<(Span, String)> = vec!();
+        let mut result: Vec<(Span, String)> = vec![];
 
-        let mut segs = vec!();
+        let mut segs = vec![];
         for (i, (seg, span)) in path.segments.iter().zip(&spans).enumerate() {
             segs.push(seg.clone());
             let sub_path = ast::Path {
@@ -854,9 +855,7 @@ impl<'l, 'tcx: 'l, 'll, D: Dump + 'll> DumpVisitor<'l, 'tcx, 'll, D> {
         let path_data = match path_data {
             Some(pd) => pd,
             None => {
-                span_bug!(path.span,
-                          "Unexpected def kind while looking up path in `{}`",
-                          self.span.snippet(path.span))
+                return;
             }
         };
 
@@ -1495,7 +1494,8 @@ impl<'l, 'tcx: 'l, 'll, D: Dump +'ll> Visitor for DumpVisitor<'l, 'tcx, 'll, D> 
                 Def::StructCtor(..) | Def::VariantCtor(..) |
                 Def::Const(..) | Def::AssociatedConst(..) |
                 Def::Struct(..) | Def::Variant(..) |
-                Def::TyAlias(..) | Def::AssociatedTy(..) => {
+                Def::TyAlias(..) | Def::AssociatedTy(..) |
+                Def::SelfTy(..) => {
                     paths_to_process.push((id, p.clone(), Some(ref_kind)))
                 }
                 def => error!("unexpected definition kind when processing collected paths: {:?}",

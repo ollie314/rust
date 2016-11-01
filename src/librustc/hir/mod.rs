@@ -413,7 +413,6 @@ pub type CrateConfig = HirVec<P<MetaItem>>;
 pub struct Crate {
     pub module: Mod,
     pub attrs: HirVec<Attribute>,
-    pub config: CrateConfig,
     pub span: Span,
     pub exported_macros: HirVec<MacroDef>,
 
@@ -458,8 +457,6 @@ pub struct MacroDef {
     pub id: NodeId,
     pub span: Span,
     pub imported_from: Option<Name>,
-    pub export: bool,
-    pub use_locally: bool,
     pub allow_internal_unstable: bool,
     pub body: HirVec<TokenTree>,
 }
@@ -819,6 +816,7 @@ pub struct Field {
     pub name: Spanned<Name>,
     pub expr: P<Expr>,
     pub span: Span,
+    pub is_shorthand: bool,
 }
 
 #[derive(Clone, PartialEq, Eq, RustcEncodable, RustcDecodable, Hash, Debug, Copy)]
@@ -942,7 +940,7 @@ pub enum Expr_ {
     ExprRet(Option<P<Expr>>),
 
     /// Inline assembly (from `asm!`), with its outputs and inputs.
-    ExprInlineAsm(InlineAsm, Vec<P<Expr>>, Vec<P<Expr>>),
+    ExprInlineAsm(P<InlineAsm>, HirVec<P<Expr>>, HirVec<P<Expr>>),
 
     /// A struct or struct-like variant literal expression.
     ///

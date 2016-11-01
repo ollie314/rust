@@ -168,8 +168,9 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 }
                 let max_len = cmp::max(expected_len, elements.len());
 
-                let element_tys: Vec<_> = (0 .. max_len).map(|_| self.next_ty_var()).collect();
-                let pat_ty = tcx.mk_tup(&element_tys);
+                let element_tys_iter = (0..max_len).map(|_| self.next_ty_var());
+                let element_tys = tcx.mk_type_list(element_tys_iter);
+                let pat_ty = tcx.mk_ty(ty::TyTuple(element_tys));
                 self.demand_eqtype(pat.span, expected, pat_ty);
                 for (i, elem) in elements.iter().enumerate_and_adjust(max_len, ddpos) {
                     self.check_pat(elem, &element_tys[i]);
@@ -488,8 +489,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         expected: Ty<'tcx>) -> Ty<'tcx>
     {
         // Resolve the path and check the definition for errors.
-        let (variant, pat_ty) = if let Some(variant_ty) = self.check_struct_path(path, pat.id,
-                                                                                 pat.span) {
+        let (variant, pat_ty) = if let Some(variant_ty) = self.check_struct_path(path, pat.id) {
             variant_ty
         } else {
             for field in fields {

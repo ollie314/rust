@@ -28,7 +28,7 @@ macro_rules! pathvec {
 
 macro_rules! path {
     ($($x:tt)*) => (
-        ::ext::deriving::generic::ty::Path::new( pathvec!( $($x)* ) )
+        ::ext::deriving::generic::ty::Path::new( pathvec![ $($x)* ] )
     )
 }
 
@@ -40,7 +40,7 @@ macro_rules! path_local {
 
 macro_rules! pathvec_std {
     ($cx:expr, $first:ident :: $($rest:ident)::+) => ({
-        let mut v = pathvec!($($rest)::+);
+        let mut v = pathvec![$($rest)::+];
         if let Some(s) = $cx.crate_root {
             v.insert(0, s);
         }
@@ -175,6 +175,7 @@ pub fn expand_derive(cx: &mut ExtCtxt,
                                            feature_gate::GateIssue::Language,
                                            feature_gate::EXPLAIN_CUSTOM_DERIVE);
         } else {
+            cx.span_warn(titem.span, feature_gate::EXPLAIN_DEPR_CUSTOM_DERIVE);
             let name = intern_and_get_ident(&format!("derive_{}", tname));
             let mitem = cx.meta_word(titem.span, name);
             new_attributes.push(cx.attribute(mitem.span, mitem));

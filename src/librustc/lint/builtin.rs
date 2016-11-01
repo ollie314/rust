@@ -120,25 +120,25 @@ declare_lint! {
 
 declare_lint! {
     pub INACCESSIBLE_EXTERN_CRATE,
-    Warn,
+    Deny,
     "use of inaccessible extern crate erroneously allowed"
 }
 
 declare_lint! {
     pub INVALID_TYPE_PARAM_DEFAULT,
-    Warn,
+    Deny,
     "type parameter default erroneously allowed in invalid location"
 }
 
 declare_lint! {
     pub ILLEGAL_FLOATING_POINT_CONSTANT_PATTERN,
-    Warn,
+    Deny,
     "floating-point constants cannot be used in patterns"
 }
 
 declare_lint! {
     pub ILLEGAL_STRUCT_OR_ENUM_CONSTANT_PATTERN,
-    Warn,
+    Deny,
     "constants of struct or enum type can only be used in a pattern if \
      the struct or enum has `#[derive(PartialEq, Eq)]`"
 }
@@ -164,7 +164,7 @@ declare_lint! {
 
 declare_lint! {
     pub OVERLAPPING_INHERENT_IMPLS,
-    Warn,
+    Deny,
     "two overlapping inherent impls define an item with the same name were erroneously allowed"
 }
 
@@ -176,13 +176,13 @@ declare_lint! {
 
 declare_lint! {
     pub SUPER_OR_SELF_IN_GLOBAL_PATH,
-    Warn,
+    Deny,
     "detects super or self keywords at the beginning of global path"
 }
 
 declare_lint! {
     pub LIFETIME_UNDERSCORE,
-    Warn,
+    Deny,
     "lifetimes or labels named `'_` were erroneously allowed"
 }
 
@@ -190,6 +190,12 @@ declare_lint! {
     pub SAFE_EXTERN_STATICS,
     Warn,
     "safe access to extern statics was erroneously allowed"
+}
+
+declare_lint! {
+    pub PATTERNS_IN_FNS_WITHOUT_BODY,
+    Warn,
+    "patterns in functions without body were erroneously allowed"
 }
 
 /// Does nothing as a lint pass, but registers some `Lint`s
@@ -228,7 +234,8 @@ impl LintPass for HardwiredLints {
             SUPER_OR_SELF_IN_GLOBAL_PATH,
             HR_LIFETIME_IN_ASSOC_TYPE,
             LIFETIME_UNDERSCORE,
-            SAFE_EXTERN_STATICS
+            SAFE_EXTERN_STATICS,
+            PATTERNS_IN_FNS_WITHOUT_BODY
         )
     }
 }

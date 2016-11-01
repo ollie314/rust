@@ -55,7 +55,7 @@ use rustc::util::nodemap::{NodeMap, NodeSet, FnvHashMap, FnvHashSet};
 
 use syntax::ext::hygiene::{Mark, SyntaxContext};
 use syntax::ast::{self, FloatTy};
-use syntax::ast::{CRATE_NODE_ID, Name, NodeId, Ident, IntTy, UintTy};
+use syntax::ast::{CRATE_NODE_ID, Name, NodeId, Ident, SpannedIdent, IntTy, UintTy};
 use syntax::ext::base::SyntaxExtension;
 use syntax::parse::token::{self, keywords};
 use syntax::util::lev_distance::find_best_match_for_name;
@@ -129,8 +129,6 @@ enum ResolutionError<'a> {
     IdentifierBoundMoreThanOnceInParameterList(&'a str),
     /// error E0416: identifier is bound more than once in the same pattern
     IdentifierBoundMoreThanOnceInSamePattern(&'a str),
-    /// error E0422: does not name a struct
-    DoesNotNameAStruct(&'a str),
     /// error E0423: is a struct variant name, but this expression uses it like a function name
     StructVariantUsedAsFunction(&'a str),
     /// error E0424: `self` is not available in a static method
@@ -334,15 +332,6 @@ fn resolve_struct_error<'b, 'a: 'b, 'c>(resolver: &'b Resolver<'a>,
                              "identifier `{}` is bound more than once in the same pattern",
                              identifier);
             err.span_label(span, &format!("used in a pattern more than once"));
-            err
-        }
-        ResolutionError::DoesNotNameAStruct(name) => {
-            let mut err = struct_span_err!(resolver.session,
-                             span,
-                             E0422,
-                             "`{}` does not name a structure",
-                             name);
-            err.span_label(span, &format!("not a structure"));
             err
         }
         ResolutionError::StructVariantUsedAsFunction(path_name) => {
@@ -844,6 +833,10 @@ impl<'a> ModuleS<'a> {
             ModuleKind::Def(Def::Trait(_), _) => true,
             _ => false,
         }
+    }
+
+    fn is_local(&self) -> bool {
+        self.normal_ancestor_id.is_some()
     }
 }
 
@@ -1408,7 +1401,7 @@ impl<'a> Resolver<'a> {
 
                                 format!("Did you mean `{}{}`?", prefix, path_str)
                             }
-                            None => format!("Maybe a missing `extern crate {}`?", segment_name),
+                            None => format!("Maybe a missing `extern crate {};`?", segment_name),
                         }
                     } else {
                         format!("Could not find `{}` in `{}`", segment_name, module_name)
@@ -1580,14 +1573,7 @@ impl<'a> Resolver<'a> {
     fn resolve_module_prefix(&mut self, module_path: &[Ident], span: Option<Span>)
                              -> ResolveResult<ModulePrefixResult<'a>> {
         if &*module_path[0].name.as_str() == "$crate" {
-            let mut ctxt = module_path[0].ctxt;
-            while ctxt.source().0 != SyntaxContext::empty() {
-                ctxt = ctxt.source().0;
-            }
-            let module = self.invocations[&ctxt.source().1].module.get();
-            let crate_root =
-                if module.def_id().unwrap().is_local() { self.graph_root } else { module };
-            return Success(PrefixFound(crate_root, 1))
+            return Success(PrefixFound(self.resolve_crate_var(module_path[0].ctxt), 1));
         }
 
         // Start at the current module if we see `self` or `super`, or at the
@@ -1618,6 +1604,14 @@ impl<'a> Resolver<'a> {
                module_to_string(&containing_module));
 
         return Success(PrefixFound(containing_module, i));
+    }
+
+    fn resolve_crate_var(&mut self, mut crate_var_ctxt: SyntaxContext) -> Module<'a> {
+        while crate_var_ctxt.source().0 != SyntaxContext::empty() {
+            crate_var_ctxt = crate_var_ctxt.source().0;
+        }
+        let module = self.invocations[&crate_var_ctxt.source().1].module.get();
+        if module.is_local() { self.graph_root } else { module }
     }
 
     // AST resolution
@@ -2278,7 +2272,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn fresh_binding(&mut self,
-                     ident: &ast::SpannedIdent,
+                     ident: &SpannedIdent,
                      pat_id: NodeId,
                      outer_pat_id: NodeId,
                      pat_src: PatternSource,
@@ -2378,6 +2372,18 @@ impl<'a> Resolver<'a> {
         self.record_def(pat_id, resolution);
     }
 
+    fn resolve_struct_path(&mut self, node_id: NodeId, path: &Path) {
+        // Resolution logic is equivalent for expressions and patterns,
+        // reuse `resolve_pattern_path` for both.
+        self.resolve_pattern_path(node_id, None, path, TypeNS, |def| {
+            match def {
+                Def::Struct(..) | Def::Union(..) | Def::Variant(..) |
+                Def::TyAlias(..) | Def::AssociatedTy(..) | Def::SelfTy(..) => true,
+                _ => false,
+            }
+        }, "struct, variant or union type");
+    }
+
     fn resolve_pattern(&mut self,
                        pat: &Pat,
                        pat_src: PatternSource,
@@ -2455,13 +2461,7 @@ impl<'a> Resolver<'a> {
                 }
 
                 PatKind::Struct(ref path, ..) => {
-                    self.resolve_pattern_path(pat.id, None, path, TypeNS, |def| {
-                        match def {
-                            Def::Struct(..) | Def::Union(..) | Def::Variant(..) |
-                            Def::TyAlias(..) | Def::AssociatedTy(..) => true,
-                            _ => false,
-                        }
-                    }, "variant, struct or type alias");
+                    self.resolve_struct_path(pat.id, path);
                 }
 
                 _ => {}
@@ -2569,7 +2569,8 @@ impl<'a> Resolver<'a> {
         let unqualified_def = resolve_identifier_with_fallback(self, None);
         let qualified_binding = self.resolve_module_relative_path(span, segments, namespace);
         match (qualified_binding, unqualified_def) {
-            (Ok(binding), Some(ref ud)) if binding.def() == ud.def => {
+            (Ok(binding), Some(ref ud)) if binding.def() == ud.def &&
+                                           segments[0].identifier.name.as_str() != "$crate" => {
                 self.session
                     .add_lint(lint::builtin::UNUSED_QUALIFICATIONS,
                               id,
@@ -2842,11 +2843,11 @@ impl<'a> Resolver<'a> {
         } SuggestionType::NotFound
     }
 
-    fn resolve_labeled_block(&mut self, label: Option<Ident>, id: NodeId, block: &Block) {
+    fn resolve_labeled_block(&mut self, label: Option<SpannedIdent>, id: NodeId, block: &Block) {
         if let Some(label) = label {
             let def = Def::Label(id);
             self.with_label_rib(|this| {
-                this.label_ribs.last_mut().unwrap().bindings.insert(label, def);
+                this.label_ribs.last_mut().unwrap().bindings.insert(label.node, def);
                 this.visit_block(block);
             });
         } else {
@@ -3018,38 +3019,9 @@ impl<'a> Resolver<'a> {
             }
 
             ExprKind::Struct(ref path, ..) => {
-                // Resolve the path to the structure it goes to. We don't
-                // check to ensure that the path is actually a structure; that
-                // is checked later during typeck.
-                match self.resolve_path(expr.id, path, 0, TypeNS) {
-                    Ok(definition) => self.record_def(expr.id, definition),
-                    Err(true) => self.record_def(expr.id, err_path_resolution()),
-                    Err(false) => {
-                        debug!("(resolving expression) didn't find struct def",);
-
-                        resolve_error(self,
-                                      path.span,
-                                      ResolutionError::DoesNotNameAStruct(
-                                                                &path_names_to_string(path, 0))
-                                     );
-                        self.record_def(expr.id, err_path_resolution());
-                    }
-                }
+                self.resolve_struct_path(expr.id, path);
 
                 visit::walk_expr(self, expr);
-            }
-
-            ExprKind::Loop(_, Some(label)) | ExprKind::While(.., Some(label)) => {
-                self.with_label_rib(|this| {
-                    let def = Def::Label(expr.id);
-
-                    {
-                        let rib = this.label_ribs.last_mut().unwrap();
-                        rib.bindings.insert(label.node, def);
-                    }
-
-                    visit::walk_expr(this, expr);
-                })
             }
 
             ExprKind::Break(Some(label)) | ExprKind::Continue(Some(label)) => {
@@ -3081,12 +3053,19 @@ impl<'a> Resolver<'a> {
                 optional_else.as_ref().map(|expr| self.visit_expr(expr));
             }
 
+            ExprKind::Loop(ref block, label) => self.resolve_labeled_block(label, expr.id, &block),
+
+            ExprKind::While(ref subexpression, ref block, label) => {
+                self.visit_expr(subexpression);
+                self.resolve_labeled_block(label, expr.id, &block);
+            }
+
             ExprKind::WhileLet(ref pattern, ref subexpression, ref block, label) => {
                 self.visit_expr(subexpression);
                 self.value_ribs.push(Rib::new(NormalRibKind));
                 self.resolve_pattern(pattern, PatternSource::WhileLet, &mut FnvHashMap());
 
-                self.resolve_labeled_block(label.map(|l| l.node), expr.id, block);
+                self.resolve_labeled_block(label, expr.id, block);
 
                 self.value_ribs.pop();
             }
@@ -3096,7 +3075,7 @@ impl<'a> Resolver<'a> {
                 self.value_ribs.push(Rib::new(NormalRibKind));
                 self.resolve_pattern(pattern, PatternSource::For, &mut FnvHashMap());
 
-                self.resolve_labeled_block(label.map(|l| l.node), expr.id, block);
+                self.resolve_labeled_block(label, expr.id, block);
 
                 self.value_ribs.pop();
             }

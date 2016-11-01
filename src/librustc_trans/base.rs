@@ -35,6 +35,7 @@ use back::link;
 use back::linker::LinkerInfo;
 use llvm::{Linkage, ValueRef, Vector, get_param};
 use llvm;
+use rustc::hir::def::Def;
 use rustc::hir::def_id::DefId;
 use middle::lang_items::{LangItem, ExchangeMallocFnLangItem, StartFnLangItem};
 use rustc::ty::subst::Substs;
@@ -44,7 +45,6 @@ use rustc::ty::adjustment::CustomCoerceUnsized;
 use rustc::dep_graph::{DepNode, WorkProduct};
 use rustc::hir::map as hir_map;
 use rustc::util::common::time;
-use rustc::mir::mir_map::MirMap;
 use session::config::{self, NoDebugInfo};
 use rustc_incremental::IncrementalHashesMap;
 use session::Session;
@@ -79,7 +79,6 @@ use type_::Type;
 use type_of;
 use value::Value;
 use Disr;
-use util::sha2::Sha256;
 use util::nodemap::{NodeSet, FnvHashMap, FnvHashSet};
 
 use arena::TypedArena;
@@ -214,7 +213,7 @@ pub fn malloc_raw_dyn<'blk, 'tcx>(bcx: Block<'blk, 'tcx>,
 
     // Allocate space:
     let def_id = require_alloc_fn(bcx, info_ty, ExchangeMallocFnLangItem);
-    let r = Callee::def(bcx.ccx(), def_id, Substs::empty(bcx.tcx()))
+    let r = Callee::def(bcx.ccx(), def_id, bcx.tcx().intern_substs(&[]))
         .call(bcx, debug_loc, &[size, align], None);
 
     Result::new(r.bcx, PointerCast(r.bcx, r.val, llty_ptr))
@@ -405,7 +404,7 @@ pub fn custom_coerce_unsize_info<'scx, 'tcx>(scx: &SharedCrateContext<'scx, 'tcx
                                              -> CustomCoerceUnsized {
     let trait_ref = ty::Binder(ty::TraitRef {
         def_id: scx.tcx().lang_items.coerce_unsized_trait().unwrap(),
-        substs: Substs::new_trait(scx.tcx(), source_ty, &[target_ty])
+        substs: scx.tcx().mk_substs_trait(source_ty, &[target_ty])
     });
 
     match fulfill_obligation(scx, DUMMY_SP, trait_ref) {
@@ -848,7 +847,7 @@ impl<'blk, 'tcx> FunctionContext<'blk, 'tcx> {
                 common::validate_substs(instance.substs);
                 (instance.substs, Some(instance.def))
             }
-            None => (Substs::empty(ccx.tcx()), None)
+            None => (ccx.tcx().intern_substs(&[]), None)
         };
 
         let local_id = def_id.and_then(|id| ccx.tcx().map.as_local_node_id(id));
@@ -866,7 +865,7 @@ impl<'blk, 'tcx> FunctionContext<'blk, 'tcx> {
             false
         };
 
-        let mir = def_id.and_then(|id| ccx.get_mir(id));
+        let mir = def_id.map(|id| ccx.tcx().item_mir(id));
 
         let debug_context = if let (false, Some((instance, sig, abi)), &Some(ref mir)) =
                 (no_debug, definition, &mir) {
@@ -1211,7 +1210,7 @@ pub fn maybe_create_entry_wrapper(ccx: &CrateContext) {
                     Ok(id) => id,
                     Err(s) => ccx.sess().fatal(&s)
                 };
-                let empty_substs = Substs::empty(ccx.tcx());
+                let empty_substs = ccx.tcx().intern_substs(&[]);
                 let start_fn = Callee::def(ccx, start_def_id, empty_substs).reify(ccx);
                 let args = {
                     let opaque_rust_main =
@@ -1278,8 +1277,7 @@ fn write_metadata(cx: &SharedCrateContext,
     let metadata = cstore.encode_metadata(cx.tcx(),
                                           cx.export_map(),
                                           cx.link_meta(),
-                                          reachable_ids,
-                                          cx.mir_map());
+                                          reachable_ids);
     if kind == MetadataKind::Uncompressed {
         return metadata;
     }
@@ -1527,7 +1525,6 @@ pub fn filter_reachable_ids(tcx: TyCtxt, reachable: NodeSet) -> NodeSet {
 }
 
 pub fn trans_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                             mir_map: &MirMap<'tcx>,
                              analysis: ty::CrateAnalysis,
                              incremental_hashes_map: &IncrementalHashesMap)
                              -> CrateTranslation {
@@ -1551,9 +1548,7 @@ pub fn trans_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let link_meta = link::build_link_meta(incremental_hashes_map, name);
 
     let shared_ccx = SharedCrateContext::new(tcx,
-                                             &mir_map,
                                              export_map,
-                                             Sha256::new(),
                                              link_meta.clone(),
                                              reachable,
                                              check_overflow);
@@ -1716,8 +1711,21 @@ pub fn trans_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     // `reachable_symbols` list later on so it should be ok.
     for cnum in sess.cstore.crates() {
         let syms = sess.cstore.reachable_ids(cnum);
-        reachable_symbols.extend(syms.into_iter().filter(|did| {
-            sess.cstore.is_extern_item(shared_ccx.tcx(), *did)
+        reachable_symbols.extend(syms.into_iter().filter(|&def_id| {
+            let applicable = match sess.cstore.describe_def(def_id) {
+                Some(Def::Static(..)) => true,
+                Some(Def::Fn(_)) => {
+                    shared_ccx.tcx().lookup_generics(def_id).types.is_empty()
+                }
+                _ => false
+            };
+
+            if applicable {
+                let attrs = shared_ccx.tcx().get_attrs(def_id);
+                attr::contains_extern_indicator(sess.diagnostic(), &attrs)
+            } else {
+                false
+            }
         }).map(|did| {
             symbol_for_def_id(did, &shared_ccx, &symbol_map)
         }));

@@ -30,8 +30,10 @@
 #![feature(specialization)]
 #![feature(staged_api)]
 
-#[macro_use] extern crate log;
-#[macro_use] extern crate syntax;
+#[macro_use]
+extern crate log;
+#[macro_use]
+extern crate syntax;
 extern crate syntax_pos;
 extern crate flate;
 extern crate serialize as rustc_serialize; // used by deriving
@@ -59,6 +61,5 @@ mod schema;
 pub mod creader;
 pub mod cstore;
 pub mod locator;
-pub mod macro_import;
 
 __build_diagnostic_array! { librustc_metadata, DIAGNOSTICS }

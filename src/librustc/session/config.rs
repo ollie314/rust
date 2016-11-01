@@ -715,7 +715,7 @@ macro_rules! options {
                     true
                 }
                 v => {
-                    let mut passes = vec!();
+                    let mut passes = vec![];
                     if parse_list(&mut passes, v) {
                         *slot = SomePasses(passes);
                         true
@@ -1237,10 +1237,9 @@ pub fn rustc_optgroups() -> Vec<RustcOptGroup> {
 pub fn parse_cfgspecs(cfgspecs: Vec<String> ) -> ast::CrateConfig {
     cfgspecs.into_iter().map(|s| {
         let sess = parse::ParseSess::new();
-        let mut parser = parse::new_parser_from_source_str(&sess,
-                                                           Vec::new(),
-                                                           "cfgspec".to_string(),
-                                                           s.to_string());
+        let mut parser =
+            parse::new_parser_from_source_str(&sess, "cfgspec".to_string(), s.to_string());
+
         let meta_item = panictry!(parser.parse_meta_item());
 
         if !parser.reader.is_eof() {
@@ -1294,7 +1293,7 @@ pub fn build_session_options_and_crate_config(matches: &getopts::Matches)
     let crate_types = parse_crate_types_from_list(unparsed_crate_types)
         .unwrap_or_else(|e| early_error(error_format, &e[..]));
 
-    let mut lint_opts = vec!();
+    let mut lint_opts = vec![];
     let mut describe_lints = false;
 
     for &level in &[lint::Allow, lint::Warn, lint::Deny, lint::Forbid] {
