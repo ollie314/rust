@@ -268,9 +268,6 @@ declare_features! (
     // Allows cfg(target_has_atomic = "...").
     (active, cfg_target_has_atomic, "1.9.0", Some(32976)),
 
-    // Allows `..` in tuple (struct) patterns
-    (active, dotdot_in_tuple_patterns, "1.10.0", Some(33627)),
-
     // Allows `impl Trait` in function return types.
     (active, conservative_impl_trait, "1.12.0", Some(34511)),
 
@@ -309,6 +306,12 @@ declare_features! (
 
     // Allows field shorthands (`x` meaning `x: x`) in struct literal expressions.
     (active, field_init_shorthand, "1.14.0", Some(37340)),
+
+    // The #![windows_subsystem] attribute
+    (active, windows_subsystem, "1.14.0", Some(37499)),
+
+    // Allows using `Self` and associated types in struct expressions and patterns.
+    (active, more_struct_aliases, "1.14.0", Some(37544)),
 );
 
 declare_features! (
@@ -353,6 +356,8 @@ declare_features! (
     (accepted, deprecated, "1.9.0", Some(29935)),
     // `expr?`
     (accepted, question_mark, "1.14.0", Some(31436)),
+    // Allows `..` in tuple (struct) patterns
+    (accepted, dotdot_in_tuple_patterns, "1.14.0", Some(33627)),
 );
 // (changing above list without updating src/doc/reference.md makes @cmr sad)
 
@@ -712,6 +717,12 @@ pub const KNOWN_ATTRIBUTES: &'static [(&'static str, AttributeType, AttributeGat
                                               "reflect",
                                               "defining reflective traits is still evolving",
                                               cfg_fn!(reflect))),
+
+    ("windows_subsystem", Whitelisted, Gated(Stability::Unstable,
+                                             "windows_subsystem",
+                                             "the windows subsystem attribute \
+                                              is currently unstable",
+                                             cfg_fn!(windows_subsystem))),
 
     // Crate level attributes
     ("crate_name", CrateLevel, Ungated),
@@ -1189,18 +1200,6 @@ impl<'a> Visitor for PostExpansionVisitor<'a> {
                 gate_feature_post!(&self, box_patterns,
                                   pattern.span,
                                   "box pattern syntax is experimental");
-            }
-            PatKind::Tuple(_, ddpos)
-                    if ddpos.is_some() => {
-                gate_feature_post!(&self, dotdot_in_tuple_patterns,
-                                  pattern.span,
-                                  "`..` in tuple patterns is experimental");
-            }
-            PatKind::TupleStruct(_, ref fields, ddpos)
-                    if ddpos.is_some() && !fields.is_empty() => {
-                gate_feature_post!(&self, dotdot_in_tuple_patterns,
-                                  pattern.span,
-                                  "`..` in tuple struct patterns is experimental");
             }
             PatKind::TupleStruct(_, ref fields, ddpos)
                     if ddpos.is_none() && fields.is_empty() => {

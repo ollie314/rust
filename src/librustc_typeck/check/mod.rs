@@ -407,22 +407,26 @@ impl<'a, 'gcx, 'tcx> InheritedBuilder<'a, 'gcx, 'tcx> {
         where F: for<'b> FnOnce(Inherited<'b, 'gcx, 'tcx>) -> R
     {
         let ccx = self.ccx;
-        self.infcx.enter(|infcx| {
-            f(Inherited {
-                ccx: ccx,
-                infcx: infcx,
-                fulfillment_cx: RefCell::new(traits::FulfillmentContext::new()),
-                locals: RefCell::new(NodeMap()),
-                deferred_call_resolutions: RefCell::new(DefIdMap()),
-                deferred_cast_checks: RefCell::new(Vec::new()),
-                anon_types: RefCell::new(DefIdMap()),
-                deferred_obligations: RefCell::new(Vec::new()),
-            })
-        })
+        self.infcx.enter(|infcx| f(Inherited::new(ccx, infcx)))
     }
 }
 
 impl<'a, 'gcx, 'tcx> Inherited<'a, 'gcx, 'tcx> {
+    pub fn new(ccx: &'a CrateCtxt<'a, 'gcx>,
+               infcx: InferCtxt<'a, 'gcx, 'tcx>)
+               -> Self {
+        Inherited {
+            ccx: ccx,
+            infcx: infcx,
+            fulfillment_cx: RefCell::new(traits::FulfillmentContext::new()),
+            locals: RefCell::new(NodeMap()),
+            deferred_call_resolutions: RefCell::new(DefIdMap()),
+            deferred_cast_checks: RefCell::new(Vec::new()),
+            anon_types: RefCell::new(DefIdMap()),
+            deferred_obligations: RefCell::new(Vec::new()),
+        }
+    }
+
     fn normalize_associated_types_in<T>(&self,
                                         span: Span,
                                         body_id: ast::NodeId,
@@ -773,7 +777,7 @@ pub fn check_item_type<'a,'tcx>(ccx: &CrateCtxt<'a,'tcx>, it: &'tcx hir::Item) {
         check_union(ccx, it.id, it.span);
       }
       hir::ItemTy(_, ref generics) => {
-        let pty_ty = ccx.tcx.node_id_to_type(it.id);
+        let pty_ty = ccx.tcx.tables().node_id_to_type(it.id);
         check_bounds_are_used(ccx, generics, pty_ty);
       }
       hir::ItemForeignMod(ref m) => {
@@ -1024,13 +1028,26 @@ fn check_impl_items_against_trait<'a, 'tcx>(ccx: &CrateCtxt<'a, 'tcx>,
 
                     let trait_span = tcx.map.span_if_local(ty_trait_item.def_id());
                     if let &ty::MethodTraitItem(ref trait_method) = ty_trait_item {
+                        let err_count = tcx.sess.err_count();
                         compare_impl_method(ccx,
                                             &impl_method,
                                             impl_item.span,
                                             body.id,
                                             &trait_method,
                                             &impl_trait_ref,
-                                            trait_span);
+                                            trait_span,
+                                            true); // start with old-broken-mode
+                        if err_count == tcx.sess.err_count() {
+                            // old broken mode did not report an error. Try with the new mode.
+                            compare_impl_method(ccx,
+                                                &impl_method,
+                                                impl_item.span,
+                                                body.id,
+                                                &trait_method,
+                                                &impl_trait_ref,
+                                                trait_span,
+                                                false); // use the new mode
+                        }
                     } else {
                         let mut err = struct_span_err!(tcx.sess, impl_item.span, E0324,
                                   "item `{}` is an associated method, \
@@ -1188,7 +1205,7 @@ fn check_representable<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                                  sp: Span,
                                  item_id: ast::NodeId)
                                  -> bool {
-    let rty = tcx.node_id_to_type(item_id);
+    let rty = tcx.tables().node_id_to_type(item_id);
 
     // Check that it is possible to represent this type. This call identifies
     // (1) types that contain themselves and (2) types that contain a different
@@ -1207,7 +1224,7 @@ fn check_representable<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
 }
 
 pub fn check_simd<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>, sp: Span, id: ast::NodeId) {
-    let t = tcx.node_id_to_type(id);
+    let t = tcx.tables().node_id_to_type(id);
     match t.sty {
         ty::TyAdt(def, substs) if def.is_struct() => {
             let fields = &def.struct_variant().fields;
@@ -1564,20 +1581,21 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
     pub fn write_autoderef_adjustment(&self,
                                       node_id: ast::NodeId,
-                                      derefs: usize) {
-        self.write_adjustment(
-            node_id,
-            adjustment::AdjustDerefRef(adjustment::AutoDerefRef {
+                                      derefs: usize,
+                                      adjusted_ty: Ty<'tcx>) {
+        self.write_adjustment(node_id, adjustment::Adjustment {
+            kind: adjustment::Adjust::DerefRef {
                 autoderefs: derefs,
                 autoref: None,
-                unsize: None
-            })
-        );
+                unsize: false
+            },
+            target: adjusted_ty
+        });
     }
 
     pub fn write_adjustment(&self,
                             node_id: ast::NodeId,
-                            adj: adjustment::AutoAdjustment<'tcx>) {
+                            adj: adjustment::Adjustment<'tcx>) {
         debug!("write_adjustment(node_id={}, adj={:?})", node_id, adj);
 
         if adj.is_identity() {
@@ -1741,21 +1759,6 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         let t = AstConv::ast_ty_to_ty(self, self, ast_t);
         self.register_wf_obligation(t, ast_t.span, traits::MiscObligation);
         t
-    }
-
-    /// Apply `adjustment` to the type of `expr`
-    pub fn adjust_expr_ty(&self,
-                          expr: &hir::Expr,
-                          adjustment: Option<&adjustment::AutoAdjustment<'tcx>>)
-                          -> Ty<'tcx>
-    {
-        let raw_ty = self.node_ty(expr.id);
-        let raw_ty = self.shallow_resolve(raw_ty);
-        let resolve_ty = |ty: Ty<'tcx>| self.resolve_type_vars_if_possible(&ty);
-        raw_ty.adjust(self.tcx, expr.span, expr.id, adjustment, |method_call| {
-            self.tables.borrow().method_map.get(&method_call)
-                                        .map(|method| resolve_ty(method.ty))
-        })
     }
 
     pub fn node_ty(&self, id: ast::NodeId) -> Ty<'tcx> {
@@ -2294,7 +2297,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                 debug!("try_index_step: success, using built-in indexing");
                 // If we had `[T; N]`, we should've caught it before unsizing to `[T]`.
                 assert!(!unsize);
-                self.write_autoderef_adjustment(base_expr.id, autoderefs);
+                self.write_autoderef_adjustment(base_expr.id, autoderefs, adjusted_ty);
                 return Some((tcx.types.usize, ty));
             }
             _ => {}
@@ -2850,9 +2853,11 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
                 // In case we did perform an adjustment, we have to update
                 // the type of the block, because old trans still uses it.
-                let adj = self.tables.borrow().adjustments.get(&then.id).cloned();
-                if res.is_ok() && adj.is_some() {
-                    self.write_ty(then_blk.id, self.adjust_expr_ty(then, adj.as_ref()));
+                if res.is_ok() {
+                    let adj = self.tables.borrow().adjustments.get(&then.id).cloned();
+                    if let Some(adj) = adj {
+                        self.write_ty(then_blk.id, adj.target);
+                    }
                 }
 
                 res
@@ -2913,7 +2918,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
                         let field_ty = self.field_ty(expr.span, field, substs);
                         if field.vis.is_accessible_from(self.body_id, &self.tcx().map) {
                             autoderef.finalize(lvalue_pref, Some(base));
-                            self.write_autoderef_adjustment(base.id, autoderefs);
+                            self.write_autoderef_adjustment(base.id, autoderefs, base_t);
                             return field_ty;
                         }
                         private_candidate = Some((base_def.did, field_ty));
@@ -3031,7 +3036,7 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
 
             if let Some(field_ty) = field {
                 autoderef.finalize(lvalue_pref, Some(base));
-                self.write_autoderef_adjustment(base.id, autoderefs);
+                self.write_autoderef_adjustment(base.id, autoderefs, base_t);
                 return field_ty;
             }
         }
@@ -3235,6 +3240,16 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
             }
             Def::Struct(..) | Def::Union(..) | Def::TyAlias(..) |
             Def::AssociatedTy(..) | Def::SelfTy(..) => {
+                match def {
+                    Def::AssociatedTy(..) | Def::SelfTy(..)
+                            if !self.tcx.sess.features.borrow().more_struct_aliases => {
+                        emit_feature_err(&self.tcx.sess.parse_sess,
+                                         "more_struct_aliases", path.span, GateIssue::Language,
+                                         "`Self` and associated types in struct \
+                                          expressions and patterns are unstable");
+                    }
+                    _ => {}
+                }
                 match ty.sty {
                     ty::TyAdt(adt, substs) if !adt.is_enum() => {
                         Some((adt.struct_variant(), adt.did, substs))
@@ -3341,8 +3356,10 @@ impl<'a, 'gcx, 'tcx> FnCtxt<'a, 'gcx, 'tcx> {
         if ty.is_never() {
             if let Some(hir::map::NodeExpr(_)) = self.tcx.map.find(expr.id) {
                 let adj_ty = self.next_diverging_ty_var();
-                let adj = adjustment::AdjustNeverToAny(adj_ty);
-                self.write_adjustment(expr.id, adj);
+                self.write_adjustment(expr.id, adjustment::Adjustment {
+                    kind: adjustment::Adjust::NeverToAny,
+                    target: adj_ty
+                });
                 return adj_ty;
             }
         }

@@ -59,15 +59,25 @@ fn fn_sig(f: &mut fmt::Formatter,
 
 pub fn parameterized(f: &mut fmt::Formatter,
                      substs: &subst::Substs,
-                     did: DefId,
+                     mut did: DefId,
                      projections: &[ty::ProjectionPredicate])
                      -> fmt::Result {
+    let key = ty::tls::with(|tcx| tcx.def_key(did));
+    let mut item_name = if let Some(name) = key.disambiguated_data.data.get_opt_name() {
+        Some(name)
+    } else {
+        did.index = key.parent.unwrap_or_else(
+            || bug!("finding type for {:?}, encountered def-id {:?} with no parent",
+                    did, did));
+        parameterized(f, substs, did, projections)?;
+        return write!(f, "::{}", key.disambiguated_data.data.as_interned_str());
+    };
+
     let mut verbose = false;
     let mut num_supplied_defaults = 0;
     let mut has_self = false;
     let mut num_regions = 0;
     let mut num_types = 0;
-    let mut item_name = None;
     let mut is_value_path = false;
     let fn_trait_kind = ty::tls::with(|tcx| {
         // Unfortunately, some kinds of items (e.g., closures) don't have
@@ -113,9 +123,10 @@ pub fn parameterized(f: &mut fmt::Formatter,
                 write!(f, "<{} as ", substs.type_at(0))?;
             }
 
-            item_name = Some(tcx.item_name(did));
             path_def_id = def_id;
         } else {
+            item_name = None;
+
             if is_value_path {
                 // Functions.
                 assert_eq!(has_self, false);
@@ -436,32 +447,9 @@ impl<'tcx, 'container> fmt::Debug for ty::AdtDefData<'tcx, 'container> {
     }
 }
 
-impl<'tcx> fmt::Debug for ty::adjustment::AutoAdjustment<'tcx> {
+impl<'tcx> fmt::Debug for ty::adjustment::Adjustment<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match *self {
-            ty::adjustment::AdjustNeverToAny(ref target) => {
-                write!(f, "AdjustNeverToAny({:?})", target)
-            }
-            ty::adjustment::AdjustReifyFnPointer => {
-                write!(f, "AdjustReifyFnPointer")
-            }
-            ty::adjustment::AdjustUnsafeFnPointer => {
-                write!(f, "AdjustUnsafeFnPointer")
-            }
-            ty::adjustment::AdjustMutToConstPointer => {
-                write!(f, "AdjustMutToConstPointer")
-            }
-            ty::adjustment::AdjustDerefRef(ref data) => {
-                write!(f, "{:?}", data)
-            }
-        }
-    }
-}
-
-impl<'tcx> fmt::Debug for ty::adjustment::AutoDerefRef<'tcx> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "AutoDerefRef({}, unsize={:?}, {:?})",
-               self.autoderefs, self.unsize, self.autoref)
+        write!(f, "{:?} -> {}", self.kind, self.target)
     }
 }
 

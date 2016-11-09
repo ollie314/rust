@@ -182,11 +182,11 @@ pub trait Drop {
     /// After this function is over, the memory of `self` will be deallocated.
     ///
     /// This function cannot be called explicitly. This is compiler error
-    /// [0040]. However, the [`std::mem::drop`] function in the prelude can be
+    /// [E0040]. However, the [`std::mem::drop`] function in the prelude can be
     /// used to call the argument's `Drop` implementation.
     ///
-    /// [0040]: https://doc.rust-lang.org/error-index.html#E0040
-    /// [`std::mem::drop`]: https://doc.rust-lang.org/std/mem/fn.drop.html
+    /// [E0040]: ../../error-index.html#E0040
+    /// [`std::mem::drop`]: ../../std/mem/fn.drop.html
     ///
     /// # Panics
     ///
@@ -194,58 +194,6 @@ pub trait Drop {
     /// a `drop()` implementation will likely abort.
     #[stable(feature = "rust1", since = "1.0.0")]
     fn drop(&mut self);
-}
-
-// implements the unary operator "op &T"
-// based on "op T" where T is expected to be `Copy`able
-macro_rules! forward_ref_unop {
-    (impl $imp:ident, $method:ident for $t:ty) => {
-        #[stable(feature = "rust1", since = "1.0.0")]
-        impl<'a> $imp for &'a $t {
-            type Output = <$t as $imp>::Output;
-
-            #[inline]
-            fn $method(self) -> <$t as $imp>::Output {
-                $imp::$method(*self)
-            }
-        }
-    }
-}
-
-// implements binary operators "&T op U", "T op &U", "&T op &U"
-// based on "T op U" where T and U are expected to be `Copy`able
-macro_rules! forward_ref_binop {
-    (impl $imp:ident, $method:ident for $t:ty, $u:ty) => {
-        #[stable(feature = "rust1", since = "1.0.0")]
-        impl<'a> $imp<$u> for &'a $t {
-            type Output = <$t as $imp<$u>>::Output;
-
-            #[inline]
-            fn $method(self, other: $u) -> <$t as $imp<$u>>::Output {
-                $imp::$method(*self, other)
-            }
-        }
-
-        #[stable(feature = "rust1", since = "1.0.0")]
-        impl<'a> $imp<&'a $u> for $t {
-            type Output = <$t as $imp<$u>>::Output;
-
-            #[inline]
-            fn $method(self, other: &'a $u) -> <$t as $imp<$u>>::Output {
-                $imp::$method(self, *other)
-            }
-        }
-
-        #[stable(feature = "rust1", since = "1.0.0")]
-        impl<'a, 'b> $imp<&'a $u> for &'b $t {
-            type Output = <$t as $imp<$u>>::Output;
-
-            #[inline]
-            fn $method(self, other: &'a $u) -> <$t as $imp<$u>>::Output {
-                $imp::$method(*self, *other)
-            }
-        }
-    }
 }
 
 /// The `Add` trait is used to specify the functionality of `+`.
@@ -2484,13 +2432,13 @@ impl<'a, T: ?Sized> Deref for &'a mut T {
 /// impl<T> Deref for DerefMutExample<T> {
 ///     type Target = T;
 ///
-///     fn deref<'a>(&'a self) -> &'a T {
+///     fn deref(&self) -> &T {
 ///         &self.value
 ///     }
 /// }
 ///
 /// impl<T> DerefMut for DerefMutExample<T> {
-///     fn deref_mut<'a>(&'a mut self) -> &'a mut T {
+///     fn deref_mut(&mut self) -> &mut T {
 ///         &mut self.value
 ///     }
 /// }

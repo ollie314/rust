@@ -914,6 +914,7 @@ impl<'a> cmp::Ord for Components<'a> {
 /// [`Path`]: struct.Path.html
 /// [`push`]: struct.PathBuf.html#method.push
 /// [`set_extension`]: struct.PathBuf.html#method.set_extension
+/// [`Deref`]: ../ops/trait.Deref.html
 ///
 /// More details about the overall approach can be found in
 /// the module documentation.
@@ -1172,6 +1173,13 @@ impl From<OsString> for PathBuf {
     }
 }
 
+#[stable(feature = "from_path_buf_for_os_string", since = "1.14.0")]
+impl From<PathBuf> for OsString {
+    fn from(path_buf : PathBuf) -> OsString {
+        path_buf.inner
+    }
+}
+
 #[stable(feature = "rust1", since = "1.0.0")]
 impl From<String> for PathBuf {
     fn from(s: String) -> PathBuf {
@@ -1279,13 +1287,6 @@ impl cmp::Ord for PathBuf {
 impl AsRef<OsStr> for PathBuf {
     fn as_ref(&self) -> &OsStr {
         &self.inner[..]
-    }
-}
-
-#[stable(feature = "rust1", since = "1.0.0")]
-impl Into<OsString> for PathBuf {
-    fn into(self) -> OsString {
-        self.inner
     }
 }
 
