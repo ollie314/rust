@@ -20,7 +20,7 @@
 use super::{SelectionContext, FulfillmentContext};
 use super::util::impl_trait_ref_and_oblig;
 
-use rustc_data_structures::fnv::FnvHashMap;
+use rustc_data_structures::fx::FxHashMap;
 use hir::def_id::DefId;
 use infer::{InferCtxt, InferOk, TypeOrigin};
 use middle::region;
@@ -120,7 +120,8 @@ pub fn find_method<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
     let trait_def_id = tcx.trait_id_of_impl(impl_data.impl_def_id).unwrap();
     let trait_def = tcx.lookup_trait_def(trait_def_id);
 
-    match trait_def.ancestors(impl_data.impl_def_id).fn_defs(tcx, name).next() {
+    let ancestors = trait_def.ancestors(impl_data.impl_def_id);
+    match ancestors.defs(tcx, name, ty::AssociatedKind::Method).next() {
         Some(node_item) => {
             let substs = tcx.infer_ctxt(None, None, Reveal::All).enter(|infcx| {
                 let substs = substs.rebase_onto(tcx, trait_def_id, impl_data.substs);
@@ -270,13 +271,13 @@ fn fulfill_implication<'a, 'gcx, 'tcx>(infcx: &InferCtxt<'a, 'gcx, 'tcx>,
 }
 
 pub struct SpecializesCache {
-    map: FnvHashMap<(DefId, DefId), bool>
+    map: FxHashMap<(DefId, DefId), bool>
 }
 
 impl SpecializesCache {
     pub fn new() -> Self {
         SpecializesCache {
-            map: FnvHashMap()
+            map: FxHashMap()
         }
     }
 

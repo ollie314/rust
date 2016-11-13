@@ -8,9 +8,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use {Module, Resolver};
+use {Module, ModuleKind, Resolver};
 use build_reduced_graph::BuildReducedGraphVisitor;
-use rustc::hir::def_id::{CRATE_DEF_INDEX, DefIndex};
+use rustc::hir::def_id::{DefId, BUILTIN_MACROS_CRATE, CRATE_DEF_INDEX, DefIndex};
+use rustc::hir::def::{Def, Export};
 use rustc::hir::map::{self, DefCollector};
 use std::cell::Cell;
 use std::rc::Rc;
@@ -21,8 +22,11 @@ use syntax::ext::base::{NormalTT, SyntaxExtension};
 use syntax::ext::expand::Expansion;
 use syntax::ext::hygiene::Mark;
 use syntax::ext::tt::macro_rules;
+use syntax::fold::Folder;
 use syntax::parse::token::intern;
+use syntax::ptr::P;
 use syntax::util::lev_distance::find_best_match_for_name;
+use syntax::visit::Visitor;
 use syntax_pos::Span;
 
 #[derive(Clone)]
@@ -97,6 +101,31 @@ impl<'a> base::Resolver for Resolver<'a> {
         mark
     }
 
+    fn eliminate_crate_var(&mut self, item: P<ast::Item>) -> P<ast::Item> {
+        struct EliminateCrateVar<'b, 'a: 'b>(&'b mut Resolver<'a>);
+
+        impl<'a, 'b> Folder for EliminateCrateVar<'a, 'b> {
+            fn fold_path(&mut self, mut path: ast::Path) -> ast::Path {
+                let ident = path.segments[0].identifier;
+                if &ident.name.as_str() == "$crate" {
+                    path.global = true;
+                    let module = self.0.resolve_crate_var(ident.ctxt);
+                    if module.is_local() {
+                        path.segments.remove(0);
+                    } else {
+                        path.segments[0].identifier = match module.kind {
+                            ModuleKind::Def(_, name) => ast::Ident::with_empty_ctxt(name),
+                            _ => unreachable!(),
+                        };
+                    }
+                }
+                path
+            }
+        }
+
+        EliminateCrateVar(self).fold_item(item).expect_one("")
+    }
+
     fn visit_expansion(&mut self, mark: Mark, expansion: &Expansion) {
         let invocation = self.invocations[&mark];
         self.collect_def_ids(invocation, expansion);
@@ -128,6 +157,13 @@ impl<'a> base::Resolver for Resolver<'a> {
 
         if export {
             def.id = self.next_node_id();
+            DefCollector::new(&mut self.definitions).with_parent(CRATE_DEF_INDEX, |collector| {
+                collector.visit_macro_def(&def)
+            });
+            self.macro_exports.push(Export {
+                name: def.ident.name,
+                def: Def::Macro(self.definitions.local_def_id(def.id)),
+            });
             self.exported_macros.push(def);
         }
     }
@@ -136,7 +172,12 @@ impl<'a> base::Resolver for Resolver<'a> {
         if let NormalTT(..) = *ext {
             self.macro_names.insert(ident.name);
         }
-        self.builtin_macros.insert(ident.name, ext);
+        let def_id = DefId {
+            krate: BUILTIN_MACROS_CRATE,
+            index: DefIndex::new(self.macro_map.len()),
+        };
+        self.macro_map.insert(def_id, ext);
+        self.builtin_macros.insert(ident.name, def_id);
     }
 
     fn add_expansions_at_stmt(&mut self, id: ast::NodeId, macros: Vec<Mark>) {
@@ -147,7 +188,7 @@ impl<'a> base::Resolver for Resolver<'a> {
         for i in 0..attrs.len() {
             let name = intern(&attrs[i].name());
             match self.builtin_macros.get(&name) {
-                Some(ext) => match **ext {
+                Some(&def_id) => match *self.get_macro(Def::Macro(def_id)) {
                     MultiModifier(..) | MultiDecorator(..) | SyntaxExtension::AttrProcMacro(..) => {
                         return Some(attrs.remove(i))
                     }
@@ -226,7 +267,7 @@ impl<'a> Resolver<'a> {
         if let Some(scope) = possible_time_travel {
             self.lexical_macro_resolutions.push((name, scope));
         }
-        self.builtin_macros.get(&name).cloned()
+        self.builtin_macros.get(&name).cloned().map(|def_id| self.get_macro(Def::Macro(def_id)))
     }
 
     fn suggest_macro_name(&mut self, name: &str, err: &mut DiagnosticBuilder<'a>) {

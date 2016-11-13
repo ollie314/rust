@@ -44,11 +44,13 @@ pub struct Config {
     pub submodules: bool,
     pub compiler_docs: bool,
     pub docs: bool,
+    pub vendor: bool,
     pub target_config: HashMap<String, Target>,
 
     // llvm codegen options
     pub llvm_assertions: bool,
     pub llvm_optimize: bool,
+    pub llvm_release_debuginfo: bool,
     pub llvm_version_check: bool,
     pub llvm_static_stdcpp: bool,
 
@@ -126,6 +128,8 @@ struct Build {
     docs: Option<bool>,
     submodules: Option<bool>,
     gdb: Option<String>,
+    vendor: Option<bool>,
+    nodejs: Option<String>,
 }
 
 /// TOML representation of how the LLVM build is configured.
@@ -135,6 +139,7 @@ struct Llvm {
     ninja: Option<bool>,
     assertions: Option<bool>,
     optimize: Option<bool>,
+    release_debuginfo: Option<bool>,
     version_check: Option<bool>,
     static_libstdcpp: Option<bool>,
 }
@@ -230,16 +235,19 @@ impl Config {
         }
         config.rustc = build.rustc.map(PathBuf::from);
         config.cargo = build.cargo.map(PathBuf::from);
+        config.nodejs = build.nodejs.map(PathBuf::from);
         config.gdb = build.gdb.map(PathBuf::from);
         set(&mut config.compiler_docs, build.compiler_docs);
         set(&mut config.docs, build.docs);
         set(&mut config.submodules, build.submodules);
+        set(&mut config.vendor, build.vendor);
 
         if let Some(ref llvm) = toml.llvm {
             set(&mut config.ccache, llvm.ccache);
             set(&mut config.ninja, llvm.ninja);
             set(&mut config.llvm_assertions, llvm.assertions);
             set(&mut config.llvm_optimize, llvm.optimize);
+            set(&mut config.llvm_release_debuginfo, llvm.release_debuginfo);
             set(&mut config.llvm_version_check, llvm.version_check);
             set(&mut config.llvm_static_stdcpp, llvm.static_libstdcpp);
         }
@@ -347,6 +355,7 @@ impl Config {
                 ("LOCAL_REBUILD", self.local_rebuild),
                 ("NINJA", self.ninja),
                 ("CODEGEN_TESTS", self.codegen_tests),
+                ("VENDOR", self.vendor),
             }
 
             match key {

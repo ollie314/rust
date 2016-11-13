@@ -131,7 +131,7 @@ impl<'a, 'tcx> TransItem<'tcx> {
                         linkage: llvm::Linkage,
                         symbol_name: &str) {
         let def_id = ccx.tcx().map.local_def_id(node_id);
-        let ty = ccx.tcx().lookup_item_type(def_id).ty;
+        let ty = ccx.tcx().item_type(def_id);
         let llty = type_of::type_of(ccx, ty);
 
         let g = declare::define_global(ccx, symbol_name, llty).unwrap_or_else(|| {
@@ -153,7 +153,7 @@ impl<'a, 'tcx> TransItem<'tcx> {
         assert!(!instance.substs.needs_infer() &&
                 !instance.substs.has_param_types());
 
-        let item_ty = ccx.tcx().lookup_item_type(instance.def).ty;
+        let item_ty = ccx.tcx().item_type(instance.def);
         let item_ty = ccx.tcx().erase_regions(&item_ty);
         let mono_ty = monomorphize::apply_param_substs(ccx.shared(), instance.substs, &item_ty);
 
@@ -164,6 +164,11 @@ impl<'a, 'tcx> TransItem<'tcx> {
         if linkage == llvm::Linkage::LinkOnceODRLinkage ||
             linkage == llvm::Linkage::WeakODRLinkage {
             llvm::SetUniqueComdat(ccx.llmod(), lldecl);
+        }
+
+        if let ty::TyClosure(..) = mono_ty.sty {
+            // set an inline hint for all closures
+            attributes::inline(lldecl, attributes::InlineAttr::Hint);
         }
 
         attributes::from_fn_attrs(ccx, &attrs, lldecl);
@@ -477,12 +482,14 @@ pub fn push_unique_type_name<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
                 push_unique_type_name(tcx, sig.output, output);
             }
         },
-        ty::TyClosure(def_id, ref closure_substs) => {
+        ty::TyClosure(def_id, closure_substs) => {
             push_item_name(tcx, def_id, output);
             output.push_str("{");
             output.push_str(&format!("{}:{}", def_id.krate, def_id.index.as_usize()));
             output.push_str("}");
-            push_type_params(tcx, closure_substs.func_substs, &[], output);
+            let generics = tcx.item_generics(tcx.closure_base_def_id(def_id));
+            let substs = closure_substs.substs.truncate_to(tcx, generics);
+            push_type_params(tcx, substs, &[], output);
         }
         ty::TyError |
         ty::TyInfer(_) |

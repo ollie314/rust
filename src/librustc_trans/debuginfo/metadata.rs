@@ -36,7 +36,7 @@ use common::CrateContext;
 use type_::Type;
 use rustc::ty::{self, AdtKind, Ty, layout};
 use session::config;
-use util::nodemap::FnvHashMap;
+use util::nodemap::FxHashMap;
 use util::common::path2cstr;
 
 use libc::{c_uint, c_longlong};
@@ -84,20 +84,20 @@ pub struct TypeMap<'tcx> {
     // The UniqueTypeIds created so far
     unique_id_interner: Interner,
     // A map from UniqueTypeId to debuginfo metadata for that type. This is a 1:1 mapping.
-    unique_id_to_metadata: FnvHashMap<UniqueTypeId, DIType>,
+    unique_id_to_metadata: FxHashMap<UniqueTypeId, DIType>,
     // A map from types to debuginfo metadata. This is a N:1 mapping.
-    type_to_metadata: FnvHashMap<Ty<'tcx>, DIType>,
+    type_to_metadata: FxHashMap<Ty<'tcx>, DIType>,
     // A map from types to UniqueTypeId. This is a N:1 mapping.
-    type_to_unique_id: FnvHashMap<Ty<'tcx>, UniqueTypeId>
+    type_to_unique_id: FxHashMap<Ty<'tcx>, UniqueTypeId>
 }
 
 impl<'tcx> TypeMap<'tcx> {
     pub fn new() -> TypeMap<'tcx> {
         TypeMap {
             unique_id_interner: Interner::new(),
-            type_to_metadata: FnvHashMap(),
-            unique_id_to_metadata: FnvHashMap(),
-            type_to_unique_id: FnvHashMap(),
+            type_to_metadata: FxHashMap(),
+            unique_id_to_metadata: FxHashMap(),
+            type_to_unique_id: FxHashMap(),
         }
     }
 
@@ -574,10 +574,11 @@ pub fn type_metadata<'a, 'tcx>(cx: &CrateContext<'a, 'tcx>,
             MetadataCreationResult::new(pointer_type_metadata(cx, t, fn_metadata), false)
 
         }
-        ty::TyClosure(_, ref substs) => {
+        ty::TyClosure(def_id, substs) => {
+            let upvar_tys : Vec<_> = substs.upvar_tys(def_id, cx.tcx()).collect();
             prepare_tuple_metadata(cx,
                                    t,
-                                   &substs.upvar_tys,
+                                   &upvar_tys,
                                    unique_type_id,
                                    usage_site_span).finalize(cx)
         }
@@ -1765,7 +1766,7 @@ pub fn create_global_var_metadata(cx: &CrateContext,
     };
 
     let is_local_to_unit = is_node_local_to_unit(cx, node_id);
-    let variable_type = tcx.erase_regions(&tcx.tables().node_id_to_type(node_id));
+    let variable_type = tcx.erase_regions(&tcx.item_type(node_def_id));
     let type_metadata = type_metadata(cx, variable_type, span);
     let var_name = tcx.item_name(node_def_id).to_string();
     let linkage_name = mangled_name_of_item(cx, node_def_id, "");

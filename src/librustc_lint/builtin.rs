@@ -118,9 +118,10 @@ impl LateLintPass for BoxPointers {
             hir::ItemEnum(..) |
             hir::ItemStruct(..) |
             hir::ItemUnion(..) => {
-                self.check_heap_type(cx, it.span, cx.tcx.tables().node_id_to_type(it.id))
+                let def_id = cx.tcx.map.local_def_id(it.id);
+                self.check_heap_type(cx, it.span, cx.tcx.item_type(def_id))
             }
-            _ => (),
+            _ => ()
         }
 
         // If it's a struct, we also have to check the fields' types
@@ -128,9 +129,9 @@ impl LateLintPass for BoxPointers {
             hir::ItemStruct(ref struct_def, _) |
             hir::ItemUnion(ref struct_def, _) => {
                 for struct_field in struct_def.fields() {
-                    self.check_heap_type(cx,
-                                         struct_field.span,
-                                         cx.tcx.tables().node_id_to_type(struct_field.id));
+                    let def_id = cx.tcx.map.local_def_id(struct_field.id);
+                    self.check_heap_type(cx, struct_field.span,
+                                         cx.tcx.item_type(def_id));
                 }
             }
             _ => (),
@@ -222,7 +223,7 @@ impl LateLintPass for UnsafeCode {
                 cx: &LateContext,
                 fk: FnKind,
                 _: &hir::FnDecl,
-                _: &hir::Block,
+                _: &hir::Expr,
                 span: Span,
                 _: ast::NodeId) {
         match fk {
@@ -585,11 +586,9 @@ impl LateLintPass for MissingDebugImplementations {
             let debug_def = cx.tcx.lookup_trait_def(debug);
             let mut impls = NodeSet();
             debug_def.for_each_impl(cx.tcx, |d| {
-                if let Some(n) = cx.tcx.map.as_local_node_id(d) {
-                    if let Some(ty_def) = cx.tcx.tables().node_id_to_type(n).ty_to_def_id() {
-                        if let Some(node_id) = cx.tcx.map.as_local_node_id(ty_def) {
-                            impls.insert(node_id);
-                        }
+                if let Some(ty_def) = cx.tcx.item_type(d).ty_to_def_id() {
+                    if let Some(node_id) = cx.tcx.map.as_local_node_id(ty_def) {
+                        impls.insert(node_id);
                     }
                 }
             });
@@ -812,13 +811,13 @@ impl LateLintPass for UnconditionalRecursion {
                 cx: &LateContext,
                 fn_kind: FnKind,
                 _: &hir::FnDecl,
-                blk: &hir::Block,
+                blk: &hir::Expr,
                 sp: Span,
                 id: ast::NodeId) {
         let method = match fn_kind {
             FnKind::ItemFn(..) => None,
             FnKind::Method(..) => {
-                cx.tcx.impl_or_trait_item(cx.tcx.map.local_def_id(id)).as_opt_method()
+                Some(cx.tcx.associated_item(cx.tcx.map.local_def_id(id)))
             }
             // closures can't recur, so they don't matter.
             FnKind::Closure(_) => return,
@@ -937,7 +936,7 @@ impl LateLintPass for UnconditionalRecursion {
 
         // Check if the expression `id` performs a call to `method`.
         fn expr_refers_to_this_method<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                                                method: &ty::Method,
+                                                method: &ty::AssociatedItem,
                                                 id: ast::NodeId)
                                                 -> bool {
             use rustc::ty::adjustment::*;
@@ -986,14 +985,14 @@ impl LateLintPass for UnconditionalRecursion {
         // Check if the method call to the method with the ID `callee_id`
         // and instantiated with `callee_substs` refers to method `method`.
         fn method_call_refers_to_method<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
-                                                  method: &ty::Method,
+                                                  method: &ty::AssociatedItem,
                                                   callee_id: DefId,
                                                   callee_substs: &Substs<'tcx>,
                                                   expr_id: ast::NodeId)
                                                   -> bool {
-            let callee_item = tcx.impl_or_trait_item(callee_id);
+            let callee_item = tcx.associated_item(callee_id);
 
-            match callee_item.container() {
+            match callee_item.container {
                 // This is an inherent method, so the `def_id` refers
                 // directly to the method definition.
                 ty::ImplContainer(_) => callee_id == method.def_id,
@@ -1034,7 +1033,7 @@ impl LateLintPass for UnconditionalRecursion {
                                 let container = ty::ImplContainer(vtable_impl.impl_def_id);
                                 // It matches if it comes from the same impl,
                                 // and has the same method name.
-                                container == method.container && callee_item.name() == method.name
+                                container == method.container && callee_item.name == method.name
                             }
 
                             // There's no way to know if this call is
@@ -1225,7 +1224,7 @@ impl LateLintPass for MutableTransmutes {
         }
 
         fn def_id_is_transmute(cx: &LateContext, def_id: DefId) -> bool {
-            match cx.tcx.lookup_item_type(def_id).ty.sty {
+            match cx.tcx.item_type(def_id).sty {
                 ty::TyFnDef(.., ref bfty) if bfty.abi == RustIntrinsic => (),
                 _ => return false,
             }
@@ -1282,7 +1281,7 @@ impl LateLintPass for UnionsWithDropFields {
         if let hir::ItemUnion(ref vdata, _) = item.node {
             let param_env = &ty::ParameterEnvironment::for_item(ctx.tcx, item.id);
             for field in vdata.fields() {
-                let field_ty = ctx.tcx.tables().node_id_to_type(field.id);
+                let field_ty = ctx.tcx.item_type(ctx.tcx.map.local_def_id(field.id));
                 if ctx.tcx.type_needs_drop_given_env(field_ty, param_env) {
                     ctx.span_lint(UNIONS_WITH_DROP_FIELDS,
                                   field.span,

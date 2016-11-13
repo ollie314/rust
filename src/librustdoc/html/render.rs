@@ -59,7 +59,7 @@ use rustc::hir::def_id::{CrateNum, CRATE_DEF_INDEX, DefId, LOCAL_CRATE};
 use rustc::middle::privacy::AccessLevels;
 use rustc::middle::stability;
 use rustc::hir;
-use rustc::util::nodemap::{FnvHashMap, FnvHashSet};
+use rustc::util::nodemap::{FxHashMap, FxHashSet};
 use rustc_data_structures::flock;
 
 use clean::{self, Attributes, GetDefId, SelfTy, Mutability};
@@ -111,9 +111,9 @@ pub struct SharedContext {
     /// `true`.
     pub include_sources: bool,
     /// The local file sources we've emitted and their respective url-paths.
-    pub local_sources: FnvHashMap<PathBuf, String>,
+    pub local_sources: FxHashMap<PathBuf, String>,
     /// All the passes that were run on this crate.
-    pub passes: FnvHashSet<String>,
+    pub passes: FxHashSet<String>,
     /// The base-URL of the issue tracker for when an item has been tagged with
     /// an issue number.
     pub issue_tracker_base_url: Option<String>,
@@ -208,7 +208,7 @@ pub struct Cache {
     /// Mapping of typaram ids to the name of the type parameter. This is used
     /// when pretty-printing a type (so pretty printing doesn't have to
     /// painfully maintain a context like this)
-    pub typarams: FnvHashMap<DefId, String>,
+    pub typarams: FxHashMap<DefId, String>,
 
     /// Maps a type id to all known implementations for that type. This is only
     /// recognized for intra-crate `ResolvedPath` types, and is used to print
@@ -216,35 +216,35 @@ pub struct Cache {
     ///
     /// The values of the map are a list of implementations and documentation
     /// found on that implementation.
-    pub impls: FnvHashMap<DefId, Vec<Impl>>,
+    pub impls: FxHashMap<DefId, Vec<Impl>>,
 
     /// Maintains a mapping of local crate node ids to the fully qualified name
     /// and "short type description" of that node. This is used when generating
     /// URLs when a type is being linked to. External paths are not located in
     /// this map because the `External` type itself has all the information
     /// necessary.
-    pub paths: FnvHashMap<DefId, (Vec<String>, ItemType)>,
+    pub paths: FxHashMap<DefId, (Vec<String>, ItemType)>,
 
     /// Similar to `paths`, but only holds external paths. This is only used for
     /// generating explicit hyperlinks to other crates.
-    pub external_paths: FnvHashMap<DefId, (Vec<String>, ItemType)>,
+    pub external_paths: FxHashMap<DefId, (Vec<String>, ItemType)>,
 
     /// This map contains information about all known traits of this crate.
     /// Implementations of a crate should inherit the documentation of the
     /// parent trait if no extra documentation is specified, and default methods
     /// should show up in documentation about trait implementations.
-    pub traits: FnvHashMap<DefId, clean::Trait>,
+    pub traits: FxHashMap<DefId, clean::Trait>,
 
     /// When rendering traits, it's often useful to be able to list all
     /// implementors of the trait, and this mapping is exactly, that: a mapping
     /// of trait ids to the list of known implementors of the trait
-    pub implementors: FnvHashMap<DefId, Vec<Implementor>>,
+    pub implementors: FxHashMap<DefId, Vec<Implementor>>,
 
     /// Cache of where external crate documentation can be found.
-    pub extern_locations: FnvHashMap<CrateNum, (String, ExternalLocation)>,
+    pub extern_locations: FxHashMap<CrateNum, (String, ExternalLocation)>,
 
     /// Cache of where documentation for primitives can be found.
-    pub primitive_locations: FnvHashMap<clean::PrimitiveType, CrateNum>,
+    pub primitive_locations: FxHashMap<clean::PrimitiveType, CrateNum>,
 
     // Note that external items for which `doc(hidden)` applies to are shown as
     // non-reachable while local items aren't. This is because we're reusing
@@ -257,7 +257,7 @@ pub struct Cache {
     parent_stack: Vec<DefId>,
     parent_is_trait_impl: bool,
     search_index: Vec<IndexItem>,
-    seen_modules: FnvHashSet<DefId>,
+    seen_modules: FxHashSet<DefId>,
     seen_mod: bool,
     stripped_mod: bool,
     deref_trait_did: Option<DefId>,
@@ -275,9 +275,9 @@ pub struct Cache {
 /// Later on moved into `CACHE_KEY`.
 #[derive(Default)]
 pub struct RenderInfo {
-    pub inlined: FnvHashSet<DefId>,
+    pub inlined: FxHashSet<DefId>,
     pub external_paths: ::core::ExternalPaths,
-    pub external_typarams: FnvHashMap<DefId, String>,
+    pub external_typarams: FxHashMap<DefId, String>,
     pub deref_trait_did: Option<DefId>,
     pub deref_mut_trait_did: Option<DefId>,
 }
@@ -376,10 +376,10 @@ impl ToJson for IndexItemFunctionType {
 thread_local!(static CACHE_KEY: RefCell<Arc<Cache>> = Default::default());
 thread_local!(pub static CURRENT_LOCATION_KEY: RefCell<Vec<String>> =
                     RefCell::new(Vec::new()));
-thread_local!(static USED_ID_MAP: RefCell<FnvHashMap<String, usize>> =
+thread_local!(static USED_ID_MAP: RefCell<FxHashMap<String, usize>> =
                     RefCell::new(init_ids()));
 
-fn init_ids() -> FnvHashMap<String, usize> {
+fn init_ids() -> FxHashMap<String, usize> {
     [
      "main",
      "search",
@@ -406,7 +406,7 @@ pub fn reset_ids(embedded: bool) {
         *s.borrow_mut() = if embedded {
             init_ids()
         } else {
-            FnvHashMap()
+            FxHashMap()
         };
     });
 }
@@ -431,7 +431,7 @@ pub fn derive_id(candidate: String) -> String {
 pub fn run(mut krate: clean::Crate,
            external_html: &ExternalHtml,
            dst: PathBuf,
-           passes: FnvHashSet<String>,
+           passes: FxHashSet<String>,
            css_file_extension: Option<PathBuf>,
            renderinfo: RenderInfo) -> Result<(), Error> {
     let src_root = match krate.src.parent() {
@@ -442,7 +442,7 @@ pub fn run(mut krate: clean::Crate,
         src_root: src_root,
         passes: passes,
         include_sources: true,
-        local_sources: FnvHashMap(),
+        local_sources: FxHashMap(),
         issue_tracker_base_url: None,
         layout: layout::Layout {
             logo: "".to_string(),
@@ -510,22 +510,22 @@ pub fn run(mut krate: clean::Crate,
         .collect();
 
     let mut cache = Cache {
-        impls: FnvHashMap(),
+        impls: FxHashMap(),
         external_paths: external_paths,
-        paths: FnvHashMap(),
-        implementors: FnvHashMap(),
+        paths: FxHashMap(),
+        implementors: FxHashMap(),
         stack: Vec::new(),
         parent_stack: Vec::new(),
         search_index: Vec::new(),
         parent_is_trait_impl: false,
-        extern_locations: FnvHashMap(),
-        primitive_locations: FnvHashMap(),
-        seen_modules: FnvHashSet(),
+        extern_locations: FxHashMap(),
+        primitive_locations: FxHashMap(),
+        seen_modules: FxHashSet(),
         seen_mod: false,
         stripped_mod: false,
         access_levels: krate.access_levels.clone(),
         orphan_impl_items: Vec::new(),
-        traits: mem::replace(&mut krate.external_traits, FnvHashMap()),
+        traits: mem::replace(&mut krate.external_traits, FxHashMap()),
         deref_trait_did: deref_trait_did,
         deref_mut_trait_did: deref_mut_trait_did,
         typarams: external_typarams,
@@ -572,7 +572,7 @@ pub fn run(mut krate: clean::Crate,
 
 /// Build the search index from the collected metadata
 fn build_index(krate: &clean::Crate, cache: &mut Cache) -> String {
-    let mut nodeid_to_pathid = FnvHashMap();
+    let mut nodeid_to_pathid = FxHashMap();
     let mut crate_items = Vec::with_capacity(cache.search_index.len());
     let mut crate_paths = Vec::<Json>::new();
 
@@ -1828,11 +1828,19 @@ fn item_module(w: &mut fmt::Formatter, cx: &Context,
                 } else {
                     String::new()
                 };
+
+                let mut unsafety_flag = "";
+                if let clean::FunctionItem(ref func) = myitem.inner {
+                    if func.unsafety == hir::Unsafety::Unsafe {
+                        unsafety_flag = "<a title='unsafe function' href='#'><sup>⚠</sup></a>";
+                    }
+                }
+
                 let doc_value = myitem.doc_value().unwrap_or("");
                 write!(w, "
                        <tr class='{stab} module-item'>
                            <td><a class='{class}' href='{href}'
-                                  title='{title}'>{name}</a></td>
+                                  title='{title}'>{name}</a>{unsafety_flag}</td>
                            <td class='docblock-short'>
                                {stab_docs} {docs}
                            </td>
@@ -1842,6 +1850,7 @@ fn item_module(w: &mut fmt::Formatter, cx: &Context,
                        docs = shorter(Some(&Markdown(doc_value).to_string())),
                        class = myitem.type_(),
                        stab = myitem.stability_class(),
+                       unsafety_flag = unsafety_flag,
                        href = item_path(myitem.type_(), myitem.name.as_ref().unwrap()),
                        title = full_path(cx, myitem))?;
             }
@@ -1963,14 +1972,13 @@ fn item_function(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
         UnstableFeatures::Allow => f.constness,
         _ => hir::Constness::NotConst
     };
-    let prefix = format!("{}{}{}{:#}fn {}{:#}",
+    let indent = format!("{}{}{}{:#}fn {}{:#}",
                          VisSpace(&it.visibility),
                          ConstnessSpace(vis_constness),
                          UnsafetySpace(f.unsafety),
                          AbiSpace(f.abi),
                          it.name.as_ref().unwrap(),
-                         f.generics);
-    let indent = repeat("&nbsp;").take(prefix.len()).collect::<String>();
+                         f.generics).len();
     write!(w, "<pre class='rust fn'>{vis}{constness}{unsafety}{abi}fn \
                {name}{generics}{decl}{where_clause}</pre>",
            vis = VisSpace(&it.visibility),
@@ -1979,22 +1987,29 @@ fn item_function(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
            abi = AbiSpace(f.abi),
            name = it.name.as_ref().unwrap(),
            generics = f.generics,
-           where_clause = WhereClause(&f.generics),
-           decl = Method(&f.decl, &indent))?;
+           where_clause = WhereClause(&f.generics, 2),
+           decl = Method(&f.decl, indent))?;
     document(w, cx, it)
 }
 
 fn item_trait(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
               t: &clean::Trait) -> fmt::Result {
     let mut bounds = String::new();
+    let mut bounds_plain = String::new();
     if !t.bounds.is_empty() {
         if !bounds.is_empty() {
             bounds.push(' ');
+            bounds_plain.push(' ');
         }
         bounds.push_str(": ");
+        bounds_plain.push_str(": ");
         for (i, p) in t.bounds.iter().enumerate() {
-            if i > 0 { bounds.push_str(" + "); }
+            if i > 0 {
+                bounds.push_str(" + ");
+                bounds_plain.push_str(" + ");
+            }
             bounds.push_str(&format!("{}", *p));
+            bounds_plain.push_str(&format!("{:#}", *p));
         }
     }
 
@@ -2005,7 +2020,8 @@ fn item_trait(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
            it.name.as_ref().unwrap(),
            t.generics,
            bounds,
-           WhereClause(&t.generics))?;
+           // Where clauses in traits are indented nine spaces, per rustdoc.css
+           WhereClause(&t.generics, 9))?;
 
     let types = t.items.iter().filter(|m| m.is_associated_type()).collect::<Vec<_>>();
     let consts = t.items.iter().filter(|m| m.is_associated_const()).collect::<Vec<_>>();
@@ -2019,7 +2035,7 @@ fn item_trait(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
         write!(w, "{{\n")?;
         for t in &types {
             write!(w, "    ")?;
-            render_assoc_item(w, t, AssocItemLink::Anchor(None))?;
+            render_assoc_item(w, t, AssocItemLink::Anchor(None), ItemType::Trait)?;
             write!(w, ";\n")?;
         }
         if !types.is_empty() && !consts.is_empty() {
@@ -2027,7 +2043,7 @@ fn item_trait(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
         }
         for t in &consts {
             write!(w, "    ")?;
-            render_assoc_item(w, t, AssocItemLink::Anchor(None))?;
+            render_assoc_item(w, t, AssocItemLink::Anchor(None), ItemType::Trait)?;
             write!(w, ";\n")?;
         }
         if !consts.is_empty() && !required.is_empty() {
@@ -2035,7 +2051,7 @@ fn item_trait(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
         }
         for m in &required {
             write!(w, "    ")?;
-            render_assoc_item(w, m, AssocItemLink::Anchor(None))?;
+            render_assoc_item(w, m, AssocItemLink::Anchor(None), ItemType::Trait)?;
             write!(w, ";\n")?;
         }
         if !required.is_empty() && !provided.is_empty() {
@@ -2043,7 +2059,7 @@ fn item_trait(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
         }
         for m in &provided {
             write!(w, "    ")?;
-            render_assoc_item(w, m, AssocItemLink::Anchor(None))?;
+            render_assoc_item(w, m, AssocItemLink::Anchor(None), ItemType::Trait)?;
             write!(w, " {{ ... }}\n")?;
         }
         write!(w, "}}")?;
@@ -2064,7 +2080,7 @@ fn item_trait(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
                id = id,
                stab = m.stability_class(),
                ns_id = ns_id)?;
-        render_assoc_item(w, m, AssocItemLink::Anchor(Some(&id)))?;
+        render_assoc_item(w, m, AssocItemLink::Anchor(Some(&id)), ItemType::Impl)?;
         write!(w, "</code>")?;
         render_stability_since(w, m, t)?;
         write!(w, "</span></h3>")?;
@@ -2218,7 +2234,8 @@ fn render_stability_since(w: &mut fmt::Formatter,
 
 fn render_assoc_item(w: &mut fmt::Formatter,
                      item: &clean::Item,
-                     link: AssocItemLink) -> fmt::Result {
+                     link: AssocItemLink,
+                     parent: ItemType) -> fmt::Result {
     fn method(w: &mut fmt::Formatter,
               meth: &clean::Item,
               unsafety: hir::Unsafety,
@@ -2226,7 +2243,8 @@ fn render_assoc_item(w: &mut fmt::Formatter,
               abi: abi::Abi,
               g: &clean::Generics,
               d: &clean::FnDecl,
-              link: AssocItemLink)
+              link: AssocItemLink,
+              parent: ItemType)
               -> fmt::Result {
         let name = meth.name.as_ref().unwrap();
         let anchor = format!("#{}.{}", meth.type_(), name);
@@ -2256,7 +2274,16 @@ fn render_assoc_item(w: &mut fmt::Formatter,
                              AbiSpace(abi),
                              name,
                              *g);
-        let indent = repeat("&nbsp;").take(prefix.len()).collect::<String>();
+        let mut indent = prefix.len();
+        let where_indent = if parent == ItemType::Trait {
+            indent += 4;
+            8
+        } else if parent == ItemType::Impl {
+            2
+        } else {
+            let prefix = prefix + &format!("{:#}", Method(d, indent));
+            prefix.lines().last().unwrap().len() + 1
+        };
         write!(w, "{}{}{}fn <a href='{href}' class='fnname'>{name}</a>\
                    {generics}{decl}{where_clause}",
                ConstnessSpace(vis_constness),
@@ -2265,19 +2292,18 @@ fn render_assoc_item(w: &mut fmt::Formatter,
                href = href,
                name = name,
                generics = *g,
-               decl = Method(d, &indent),
-               where_clause = WhereClause(g))
+               decl = Method(d, indent),
+               where_clause = WhereClause(g, where_indent))
     }
     match item.inner {
         clean::StrippedItem(..) => Ok(()),
         clean::TyMethodItem(ref m) => {
             method(w, item, m.unsafety, hir::Constness::NotConst,
-                   m.abi, &m.generics, &m.decl, link)
+                   m.abi, &m.generics, &m.decl, link, parent)
         }
         clean::MethodItem(ref m) => {
             method(w, item, m.unsafety, m.constness,
-                   m.abi, &m.generics, &m.decl,
-                   link)
+                   m.abi, &m.generics, &m.decl, link, parent)
         }
         clean::AssociatedConstItem(ref ty, ref default) => {
             assoc_const(w, item, ty, default.as_ref(), link)
@@ -2374,11 +2400,15 @@ fn item_enum(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
              e: &clean::Enum) -> fmt::Result {
     write!(w, "<pre class='rust enum'>")?;
     render_attributes(w, it)?;
+    let padding = format!("{}enum {}{:#} ",
+                          VisSpace(&it.visibility),
+                          it.name.as_ref().unwrap(),
+                          e.generics).len();
     write!(w, "{}enum {}{}{}",
            VisSpace(&it.visibility),
            it.name.as_ref().unwrap(),
            e.generics,
-           WhereClause(&e.generics))?;
+           WhereClause(&e.generics, padding))?;
     if e.variants.is_empty() && !e.variants_stripped {
         write!(w, " {{}}")?;
     } else {
@@ -2458,8 +2488,13 @@ fn item_enum(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
             if let clean::VariantItem(Variant {
                 kind: VariantKind::Struct(ref s)
             }) = variant.inner {
-                write!(w, "<h3 class='fields'>Fields</h3>\n
-                           <table>")?;
+                let variant_id = derive_id(format!("{}.{}.fields",
+                                                   ItemType::Variant,
+                                                   variant.name.as_ref().unwrap()));
+                write!(w, "<span class='docblock autohide sub-variant' id='{id}'>",
+                       id = variant_id)?;
+                write!(w, "<h3 class='fields'>Fields of <code>{name}</code></h3>\n
+                           <table>", name = variant.name.as_ref().unwrap())?;
                 for field in &s.fields {
                     use clean::StructFieldItem;
                     if let StructFieldItem(ref ty) = field.inner {
@@ -2483,7 +2518,7 @@ fn item_enum(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
                         write!(w, "</td></tr>")?;
                     }
                 }
-                write!(w, "</table>")?;
+                write!(w, "</table></span>")?;
             }
             render_stability_since(w, variant, it)?;
         }
@@ -2492,17 +2527,54 @@ fn item_enum(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
     Ok(())
 }
 
-fn render_attributes(w: &mut fmt::Formatter, it: &clean::Item) -> fmt::Result {
-    for attr in &it.attrs {
-        match *attr {
-            clean::Word(ref s) if *s == "must_use" => {
-                write!(w, "#[{}]\n", s)?;
-            }
-            clean::NameValue(ref k, ref v) if *k == "must_use" => {
-                write!(w, "#[{} = \"{}\"]\n", k, v)?;
-            }
-            _ => ()
+fn attribute_without_value(s: &str) -> bool {
+    ["must_use", "no_mangle", "unsafe_destructor_blind_to_params"].iter().any(|x| x == &s)
+}
+
+fn attribute_with_value(s: &str) -> bool {
+    ["export_name", "lang", "link_section", "must_use"].iter().any(|x| x == &s)
+}
+
+fn attribute_with_values(s: &str) -> bool {
+    ["repr"].iter().any(|x| x == &s)
+}
+
+fn render_attribute(attr: &clean::Attribute, recurse: bool) -> Option<String> {
+    match *attr {
+        clean::Word(ref s) if attribute_without_value(&*s) || recurse => {
+            Some(format!("{}", s))
         }
+        clean::NameValue(ref k, ref v) if attribute_with_value(&*k) => {
+            Some(format!("{} = \"{}\"", k, v))
+        }
+        clean::List(ref k, ref values) if attribute_with_values(&*k) => {
+            let display: Vec<_> = values.iter()
+                                        .filter_map(|value| render_attribute(value, true))
+                                        .map(|entry| format!("{}", entry))
+                                        .collect();
+
+            if display.len() > 0 {
+                Some(format!("{}({})", k, display.join(", ")))
+            } else {
+                None
+            }
+        }
+        _ => {
+            None
+        }
+    }
+}
+
+fn render_attributes(w: &mut fmt::Formatter, it: &clean::Item) -> fmt::Result {
+    let mut attrs = String::new();
+
+    for attr in &it.attrs {
+        if let Some(s) = render_attribute(attr, false) {
+            attrs.push_str(&format!("#[{}]\n", s));
+        }
+    }
+    if attrs.len() > 0 {
+        write!(w, "<div class=\"docblock attributes\">{}</div>", &attrs)?;
     }
     Ok(())
 }
@@ -2513,17 +2585,23 @@ fn render_struct(w: &mut fmt::Formatter, it: &clean::Item,
                  fields: &[clean::Item],
                  tab: &str,
                  structhead: bool) -> fmt::Result {
+    let mut plain = String::new();
     write!(w, "{}{}{}",
            VisSpace(&it.visibility),
            if structhead {"struct "} else {""},
            it.name.as_ref().unwrap())?;
+    plain.push_str(&format!("{}{}{}",
+                            VisSpace(&it.visibility),
+                            if structhead {"struct "} else {""},
+                            it.name.as_ref().unwrap()));
     if let Some(g) = g {
+        plain.push_str(&format!("{:#}", g));
         write!(w, "{}", g)?
     }
     match ty {
         doctree::Plain => {
             if let Some(g) = g {
-                write!(w, "{}", WhereClause(g))?
+                write!(w, "{}", WhereClause(g, plain.len() + 1))?
             }
             let mut has_visible_fields = false;
             write!(w, " {{")?;
@@ -2552,30 +2630,35 @@ fn render_struct(w: &mut fmt::Formatter, it: &clean::Item,
         }
         doctree::Tuple => {
             write!(w, "(")?;
+            plain.push_str("(");
             for (i, field) in fields.iter().enumerate() {
                 if i > 0 {
                     write!(w, ", ")?;
+                    plain.push_str(", ");
                 }
                 match field.inner {
                     clean::StrippedItem(box clean::StructFieldItem(..)) => {
+                        plain.push_str("_");
                         write!(w, "_")?
                     }
                     clean::StructFieldItem(ref ty) => {
+                        plain.push_str(&format!("{}{:#}", VisSpace(&field.visibility), *ty));
                         write!(w, "{}{}", VisSpace(&field.visibility), *ty)?
                     }
                     _ => unreachable!()
                 }
             }
             write!(w, ")")?;
+            plain.push_str(")");
             if let Some(g) = g {
-                write!(w, "{}", WhereClause(g))?
+                write!(w, "{}", WhereClause(g, plain.len() + 1))?
             }
             write!(w, ";")?;
         }
         doctree::Unit => {
             // Needed for PhantomData.
             if let Some(g) = g {
-                write!(w, "{}", WhereClause(g))?
+                write!(w, "{}", WhereClause(g, plain.len() + 1))?
             }
             write!(w, ";")?;
         }
@@ -2588,13 +2671,19 @@ fn render_union(w: &mut fmt::Formatter, it: &clean::Item,
                 fields: &[clean::Item],
                 tab: &str,
                 structhead: bool) -> fmt::Result {
+    let mut plain = String::new();
     write!(w, "{}{}{}",
            VisSpace(&it.visibility),
            if structhead {"union "} else {""},
            it.name.as_ref().unwrap())?;
+    plain.push_str(&format!("{}{}{}",
+                            VisSpace(&it.visibility),
+                            if structhead {"union "} else {""},
+                            it.name.as_ref().unwrap()));
     if let Some(g) = g {
         write!(w, "{}", g)?;
-        write!(w, "{}", WhereClause(g))?;
+        plain.push_str(&format!("{:#}", g));
+        write!(w, "{}", WhereClause(g, plain.len() + 1))?;
     }
 
     write!(w, " {{\n{}", tab)?;
@@ -2618,7 +2707,7 @@ fn render_union(w: &mut fmt::Formatter, it: &clean::Item,
 #[derive(Copy, Clone)]
 enum AssocItemLink<'a> {
     Anchor(Option<&'a str>),
-    GotoSource(DefId, &'a FnvHashSet<String>),
+    GotoSource(DefId, &'a FxHashSet<String>),
 }
 
 impl<'a> AssocItemLink<'a> {
@@ -2785,7 +2874,7 @@ fn render_impl(w: &mut fmt::Formatter, cx: &Context, i: &Impl, link: AssocItemLi
                     write!(w, "<h4 id='{}' class='{}'>", id, item_type)?;
                     write!(w, "<span id='{}' class='invisible'>", ns_id)?;
                     write!(w, "<code>")?;
-                    render_assoc_item(w, item, link.anchor(&id))?;
+                    render_assoc_item(w, item, link.anchor(&id), ItemType::Impl)?;
                     write!(w, "</code>")?;
                     render_stability_since_raw(w, item.stable_since(), outer_version)?;
                     write!(w, "</span></h4>\n")?;
@@ -2895,10 +2984,11 @@ fn render_impl(w: &mut fmt::Formatter, cx: &Context, i: &Impl, link: AssocItemLi
 
 fn item_typedef(w: &mut fmt::Formatter, cx: &Context, it: &clean::Item,
                 t: &clean::Typedef) -> fmt::Result {
+    let indent = format!("type {}{:#} ", it.name.as_ref().unwrap(), t.generics).len();
     write!(w, "<pre class='rust typedef'>type {}{}{where_clause} = {type_};</pre>",
            it.name.as_ref().unwrap(),
            t.generics,
-           where_clause = WhereClause(&t.generics),
+           where_clause = WhereClause(&t.generics, indent),
            type_ = t.type_)?;
 
     document(w, cx, it)

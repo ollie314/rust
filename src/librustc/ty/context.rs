@@ -36,7 +36,7 @@ use ty::layout::{Layout, TargetDataLayout};
 use ty::maps;
 use util::common::MemoizationMap;
 use util::nodemap::{NodeMap, NodeSet, DefIdMap, DefIdSet};
-use util::nodemap::{FnvHashMap, FnvHashSet};
+use util::nodemap::{FxHashMap, FxHashSet};
 use rustc_data_structures::accumulate_vec::AccumulateVec;
 
 use arena::TypedArena;
@@ -96,26 +96,26 @@ pub struct CtxtInterners<'tcx> {
 
     /// Specifically use a speedy hash algorithm for these hash sets,
     /// they're accessed quite often.
-    type_: RefCell<FnvHashSet<Interned<'tcx, TyS<'tcx>>>>,
-    type_list: RefCell<FnvHashSet<Interned<'tcx, Slice<Ty<'tcx>>>>>,
-    substs: RefCell<FnvHashSet<Interned<'tcx, Substs<'tcx>>>>,
-    bare_fn: RefCell<FnvHashSet<Interned<'tcx, BareFnTy<'tcx>>>>,
-    region: RefCell<FnvHashSet<Interned<'tcx, Region>>>,
-    stability: RefCell<FnvHashSet<&'tcx attr::Stability>>,
-    layout: RefCell<FnvHashSet<&'tcx Layout>>,
+    type_: RefCell<FxHashSet<Interned<'tcx, TyS<'tcx>>>>,
+    type_list: RefCell<FxHashSet<Interned<'tcx, Slice<Ty<'tcx>>>>>,
+    substs: RefCell<FxHashSet<Interned<'tcx, Substs<'tcx>>>>,
+    bare_fn: RefCell<FxHashSet<Interned<'tcx, BareFnTy<'tcx>>>>,
+    region: RefCell<FxHashSet<Interned<'tcx, Region>>>,
+    stability: RefCell<FxHashSet<&'tcx attr::Stability>>,
+    layout: RefCell<FxHashSet<&'tcx Layout>>,
 }
 
 impl<'gcx: 'tcx, 'tcx> CtxtInterners<'tcx> {
     fn new(arenas: &'tcx CtxtArenas<'tcx>) -> CtxtInterners<'tcx> {
         CtxtInterners {
             arenas: arenas,
-            type_: RefCell::new(FnvHashSet()),
-            type_list: RefCell::new(FnvHashSet()),
-            substs: RefCell::new(FnvHashSet()),
-            bare_fn: RefCell::new(FnvHashSet()),
-            region: RefCell::new(FnvHashSet()),
-            stability: RefCell::new(FnvHashSet()),
-            layout: RefCell::new(FnvHashSet())
+            type_: RefCell::new(FxHashSet()),
+            type_list: RefCell::new(FxHashSet()),
+            substs: RefCell::new(FxHashSet()),
+            bare_fn: RefCell::new(FxHashSet()),
+            region: RefCell::new(FxHashSet()),
+            stability: RefCell::new(FxHashSet()),
+            layout: RefCell::new(FxHashSet())
         }
     }
 
@@ -244,11 +244,11 @@ pub struct Tables<'tcx> {
 impl<'a, 'gcx, 'tcx> Tables<'tcx> {
     pub fn empty() -> Tables<'tcx> {
         Tables {
-            node_types: FnvHashMap(),
+            node_types: FxHashMap(),
             item_substs: NodeMap(),
             adjustments: NodeMap(),
-            method_map: FnvHashMap(),
-            upvar_capture_map: FnvHashMap(),
+            method_map: FxHashMap(),
+            upvar_capture_map: FxHashMap(),
             closure_tys: DefIdMap(),
             closure_kinds: DefIdMap(),
             liberated_fn_sigs: NodeMap(),
@@ -403,14 +403,10 @@ pub struct GlobalCtxt<'tcx> {
     pub tables: RefCell<Tables<'tcx>>,
 
     /// Maps from a trait item to the trait item "descriptor"
-    pub impl_or_trait_items: RefCell<DepTrackingMap<maps::ImplOrTraitItems<'tcx>>>,
+    pub associated_items: RefCell<DepTrackingMap<maps::AssociatedItems<'tcx>>>,
 
     /// Maps from an impl/trait def-id to a list of the def-ids of its items
-    pub impl_or_trait_item_def_ids: RefCell<DepTrackingMap<maps::ImplOrTraitItemDefIds<'tcx>>>,
-
-    /// A cache for the trait_items() routine; note that the routine
-    /// itself pushes the `TraitItems` dependency node.
-    trait_items_cache: RefCell<DepTrackingMap<maps::TraitItems<'tcx>>>,
+    pub associated_item_def_ids: RefCell<DepTrackingMap<maps::AssociatedItemDefIds<'tcx>>>,
 
     pub impl_trait_refs: RefCell<DepTrackingMap<maps::ImplTraitRefs<'tcx>>>,
     pub trait_defs: RefCell<DepTrackingMap<maps::TraitDefs<'tcx>>>,
@@ -448,19 +444,19 @@ pub struct GlobalCtxt<'tcx> {
     pub maybe_unused_trait_imports: NodeSet,
 
     // Records the type of every item.
-    pub tcache: RefCell<DepTrackingMap<maps::Tcache<'tcx>>>,
+    pub item_types: RefCell<DepTrackingMap<maps::Types<'tcx>>>,
 
     // Internal cache for metadata decoding. No need to track deps on this.
-    pub rcache: RefCell<FnvHashMap<ty::CReaderCacheKey, Ty<'tcx>>>,
+    pub rcache: RefCell<FxHashMap<ty::CReaderCacheKey, Ty<'tcx>>>,
 
     // Cache for the type-contents routine. FIXME -- track deps?
-    pub tc_cache: RefCell<FnvHashMap<Ty<'tcx>, ty::contents::TypeContents>>,
+    pub tc_cache: RefCell<FxHashMap<Ty<'tcx>, ty::contents::TypeContents>>,
 
     // FIXME no dep tracking, but we should be able to remove this
     pub ty_param_defs: RefCell<NodeMap<ty::TypeParameterDef<'tcx>>>,
 
     // FIXME dep tracking -- should be harmless enough
-    pub normalized_cache: RefCell<FnvHashMap<Ty<'tcx>, Ty<'tcx>>>,
+    pub normalized_cache: RefCell<FxHashMap<Ty<'tcx>, Ty<'tcx>>>,
 
     pub lang_items: middle::lang_items::LanguageItems,
 
@@ -571,7 +567,7 @@ pub struct GlobalCtxt<'tcx> {
     pub data_layout: TargetDataLayout,
 
     /// Cache for layouts computed from types.
-    pub layout_cache: RefCell<FnvHashMap<Ty<'tcx>, &'tcx Layout>>,
+    pub layout_cache: RefCell<FxHashMap<Ty<'tcx>, &'tcx Layout>>,
 
     /// Used to prevent layout from recursing too deeply.
     pub layout_depth: Cell<usize>,
@@ -667,10 +663,6 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                               -> ty::TypeParameterDef<'tcx>
     {
         self.ty_param_defs.borrow().get(&node_id).unwrap().clone()
-    }
-
-    pub fn node_type_insert(self, id: NodeId, ty: Ty<'gcx>) {
-        self.tables.borrow_mut().node_types.insert(id, ty);
     }
 
     pub fn alloc_generics(self, generics: ty::Generics<'gcx>)
@@ -801,7 +793,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             types: common_types,
             named_region_map: named_region_map,
             region_maps: region_maps,
-            free_region_maps: RefCell::new(FnvHashMap()),
+            free_region_maps: RefCell::new(FxHashMap()),
             item_variance_map: RefCell::new(DepTrackingMap::new(dep_graph.clone())),
             variance_computed: Cell::new(false),
             sess: s,
@@ -819,14 +811,13 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             mir_map: RefCell::new(DepTrackingMap::new(dep_graph.clone())),
             freevars: RefCell::new(freevars),
             maybe_unused_trait_imports: maybe_unused_trait_imports,
-            tcache: RefCell::new(DepTrackingMap::new(dep_graph.clone())),
-            rcache: RefCell::new(FnvHashMap()),
-            tc_cache: RefCell::new(FnvHashMap()),
-            impl_or_trait_items: RefCell::new(DepTrackingMap::new(dep_graph.clone())),
-            impl_or_trait_item_def_ids: RefCell::new(DepTrackingMap::new(dep_graph.clone())),
-            trait_items_cache: RefCell::new(DepTrackingMap::new(dep_graph.clone())),
+            item_types: RefCell::new(DepTrackingMap::new(dep_graph.clone())),
+            rcache: RefCell::new(FxHashMap()),
+            tc_cache: RefCell::new(FxHashMap()),
+            associated_items: RefCell::new(DepTrackingMap::new(dep_graph.clone())),
+            associated_item_def_ids: RefCell::new(DepTrackingMap::new(dep_graph.clone())),
             ty_param_defs: RefCell::new(NodeMap()),
-            normalized_cache: RefCell::new(FnvHashMap()),
+            normalized_cache: RefCell::new(FxHashMap()),
             lang_items: lang_items,
             inherent_impls: RefCell::new(DepTrackingMap::new(dep_graph.clone())),
             used_unsafe: RefCell::new(NodeSet()),
@@ -846,7 +837,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             fragment_infos: RefCell::new(DefIdMap()),
             crate_name: token::intern_and_get_ident(crate_name),
             data_layout: data_layout,
-            layout_cache: RefCell::new(FnvHashMap()),
+            layout_cache: RefCell::new(FxHashMap()),
             layout_depth: Cell::new(0),
             derive_macros: RefCell::new(NodeMap()),
        }, f)
@@ -1455,12 +1446,10 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
 
     pub fn mk_closure(self,
                       closure_id: DefId,
-                      substs: &'tcx Substs<'tcx>,
-                      tys: &[Ty<'tcx>])
+                      substs: &'tcx Substs<'tcx>)
                       -> Ty<'tcx> {
         self.mk_closure_from_closure_substs(closure_id, ClosureSubsts {
-            func_substs: substs,
-            upvar_tys: self.intern_type_list(tys)
+            substs: substs
         })
     }
 
@@ -1539,15 +1528,6 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
         self.mk_substs(iter::once(s).chain(t.into_iter().cloned()).map(Kind::from))
     }
 
-    pub fn trait_items(self, trait_did: DefId) -> Rc<Vec<ty::ImplOrTraitItem<'gcx>>> {
-        self.trait_items_cache.memoize(trait_did, || {
-            let def_ids = self.impl_or_trait_items(trait_did);
-            Rc::new(def_ids.iter()
-                           .map(|&def_id| self.impl_or_trait_item(def_id))
-                           .collect())
-        })
-    }
-
     /// Obtain the representation annotation for a struct definition.
     pub fn lookup_repr_hints(self, did: DefId) -> Rc<Vec<attr::ReprAttr>> {
         self.repr_hint_cache.memoize(did, || {
@@ -1592,4 +1572,3 @@ impl<T, R, E> InternIteratorElement<T, R> for Result<T, E> {
         Ok(f(&iter.collect::<Result<AccumulateVec<[_; 8]>, _>>()?))
     }
 }
-

@@ -51,7 +51,7 @@ struct ExprVisitor<'a, 'gcx: 'a+'tcx, 'tcx: 'a> {
 
 impl<'a, 'gcx, 'tcx> ExprVisitor<'a, 'gcx, 'tcx> {
     fn def_id_is_transmute(&self, def_id: DefId) -> bool {
-        let intrinsic = match self.infcx.tcx.lookup_item_type(def_id).ty.sty {
+        let intrinsic = match self.infcx.tcx.item_type(def_id).sty {
             ty::TyFnDef(.., ref bfty) => bfty.abi == RustIntrinsic,
             _ => return false
         };
@@ -144,7 +144,7 @@ impl<'a, 'tcx, 'v> Visitor<'v> for ItemVisitor<'a, 'tcx> {
     }
 
     fn visit_fn(&mut self, fk: FnKind<'v>, fd: &'v hir::FnDecl,
-                b: &'v hir::Block, s: Span, id: ast::NodeId) {
+                b: &'v hir::Expr, s: Span, id: ast::NodeId) {
         if let FnKind::Closure(..) = fk {
             span_bug!(s, "intrinsicck: closure outside of function")
         }

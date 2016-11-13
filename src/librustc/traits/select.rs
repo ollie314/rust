@@ -51,7 +51,7 @@ use std::mem;
 use std::rc::Rc;
 use syntax::abi::Abi;
 use hir;
-use util::nodemap::FnvHashMap;
+use util::nodemap::FxHashMap;
 
 struct InferredObligationsSnapshotVecDelegate<'tcx> {
     phantom: PhantomData<&'tcx i32>,
@@ -104,8 +104,8 @@ struct TraitObligationStack<'prev, 'tcx: 'prev> {
 
 #[derive(Clone)]
 pub struct SelectionCache<'tcx> {
-    hashmap: RefCell<FnvHashMap<ty::TraitRef<'tcx>,
-                                SelectionResult<'tcx, SelectionCandidate<'tcx>>>>,
+    hashmap: RefCell<FxHashMap<ty::TraitRef<'tcx>,
+                               SelectionResult<'tcx, SelectionCandidate<'tcx>>>>,
 }
 
 pub enum MethodMatchResult {
@@ -306,7 +306,7 @@ enum EvaluationResult {
 
 #[derive(Clone)]
 pub struct EvaluationCache<'tcx> {
-    hashmap: RefCell<FnvHashMap<ty::PolyTraitRef<'tcx>, EvaluationResult>>
+    hashmap: RefCell<FxHashMap<ty::PolyTraitRef<'tcx>, EvaluationResult>>
 }
 
 impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
@@ -1200,7 +1200,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
                 def_id={:?}, substs={:?}",
                def_id, substs);
 
-        let item_predicates = self.tcx().lookup_predicates(def_id);
+        let item_predicates = self.tcx().item_predicates(def_id);
         let bounds = item_predicates.instantiate(self.tcx(), substs);
         debug!("match_projection_obligation_against_definition_bounds: \
                 bounds={:?}",
@@ -1912,16 +1912,16 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
                 tys.to_vec()
             }
 
-            ty::TyClosure(_, ref substs) => {
+            ty::TyClosure(def_id, ref substs) => {
                 // FIXME(#27086). We are invariant w/r/t our
-                // substs.func_substs, but we don't see them as
+                // func_substs, but we don't see them as
                 // constituent types; this seems RIGHT but also like
                 // something that a normal type couldn't simulate. Is
                 // this just a gap with the way that PhantomData and
                 // OIBIT interact? That is, there is no way to say
                 // "make me invariant with respect to this TYPE, but
                 // do not act as though I can reach it"
-                substs.upvar_tys.to_vec()
+                substs.upvar_tys(def_id, self.tcx()).collect()
             }
 
             // for `PhantomData<T>`, we pass `T`
@@ -2884,7 +2884,7 @@ impl<'cx, 'gcx, 'tcx> SelectionContext<'cx, 'gcx, 'tcx> {
         // obligation will normalize to `<$0 as Iterator>::Item = $1` and
         // `$1: Copy`, so we must ensure the obligations are emitted in
         // that order.
-        let predicates = tcx.lookup_predicates(def_id);
+        let predicates = tcx.item_predicates(def_id);
         assert_eq!(predicates.parent, None);
         let predicates = predicates.predicates.iter().flat_map(|predicate| {
             let predicate = normalize_with_depth(self, cause.clone(), recursion_depth,
@@ -2937,7 +2937,7 @@ impl<'tcx> TraitObligation<'tcx> {
 impl<'tcx> SelectionCache<'tcx> {
     pub fn new() -> SelectionCache<'tcx> {
         SelectionCache {
-            hashmap: RefCell::new(FnvHashMap())
+            hashmap: RefCell::new(FxHashMap())
         }
     }
 }
@@ -2945,7 +2945,7 @@ impl<'tcx> SelectionCache<'tcx> {
 impl<'tcx> EvaluationCache<'tcx> {
     pub fn new() -> EvaluationCache<'tcx> {
         EvaluationCache {
-            hashmap: RefCell::new(FnvHashMap())
+            hashmap: RefCell::new(FxHashMap())
         }
     }
 }

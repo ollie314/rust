@@ -31,6 +31,7 @@ use rustc::ty::{self, Ty, TyCtxt};
 use rustc::ty::subst::Substs;
 use rustc::hir;
 use rustc::hir::intravisit::{self, FnKind, Visitor};
+use syntax::abi::Abi;
 use syntax::ast;
 use syntax_pos::Span;
 
@@ -209,7 +210,7 @@ impl<'a, 'tcx> Visitor<'tcx> for BuildMir<'a, 'tcx> {
     fn visit_fn(&mut self,
                 fk: FnKind<'tcx>,
                 decl: &'tcx hir::FnDecl,
-                body: &'tcx hir::Block,
+                body: &'tcx hir::Expr,
                 span: Span,
                 id: ast::NodeId) {
         // fetch the fully liberated fn signature (that is, all bound
@@ -221,10 +222,11 @@ impl<'a, 'tcx> Visitor<'tcx> for BuildMir<'a, 'tcx> {
             }
         };
 
-        let implicit_argument = if let FnKind::Closure(..) = fk {
-            Some((closure_self_ty(self.tcx, id, body.id), None))
+        let (abi, implicit_argument) = if let FnKind::Closure(..) = fk {
+            (Abi::Rust, Some((closure_self_ty(self.tcx, id, body.id), None)))
         } else {
-            None
+            let def_id = self.tcx.map.local_def_id(id);
+            (self.tcx.item_type(def_id).fn_abi(), None)
         };
 
         let explicit_arguments =
@@ -237,7 +239,7 @@ impl<'a, 'tcx> Visitor<'tcx> for BuildMir<'a, 'tcx> {
 
         let arguments = implicit_argument.into_iter().chain(explicit_arguments);
         self.cx(MirSource::Fn(id)).build(|cx| {
-            build::construct_fn(cx, id, arguments, fn_sig.output, body)
+            build::construct_fn(cx, id, arguments, abi, fn_sig.output, body)
         });
 
         intravisit::walk_fn(self, fk, decl, body, span, id);

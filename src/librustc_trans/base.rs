@@ -79,7 +79,7 @@ use type_::Type;
 use type_of;
 use value::Value;
 use Disr;
-use util::nodemap::{NodeSet, FnvHashMap, FnvHashSet};
+use util::nodemap::{NodeSet, FxHashMap, FxHashSet};
 
 use arena::TypedArena;
 use libc::c_uint;
@@ -1003,34 +1003,41 @@ impl<'blk, 'tcx> FunctionContext<'blk, 'tcx> {
     }
 }
 
-/// Builds an LLVM function out of a source function.
-///
-/// If the function closes over its environment a closure will be returned.
-pub fn trans_closure<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
-                               llfndecl: ValueRef,
-                               instance: Instance<'tcx>,
-                               sig: &ty::FnSig<'tcx>,
-                               abi: Abi) {
-    ccx.stats().n_closures.set(ccx.stats().n_closures.get() + 1);
-
-    let _icx = push_ctxt("trans_closure");
-    if !ccx.sess().no_landing_pads() {
-        attributes::emit_uwtable(llfndecl, true);
-    }
-
+pub fn trans_instance<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>, instance: Instance<'tcx>) {
+    let _s = StatRecorder::new(ccx, ccx.tcx().item_path_str(instance.def));
     // this is an info! to allow collecting monomorphization statistics
     // and to allow finding the last function before LLVM aborts from
     // release builds.
-    info!("trans_closure(..., {})", instance);
+    info!("trans_instance({})", instance);
 
-    let fn_ty = FnType::new(ccx, abi, sig, &[]);
+    let _icx = push_ctxt("trans_instance");
+
+    let fn_ty = ccx.tcx().item_type(instance.def);
+    let fn_ty = ccx.tcx().erase_regions(&fn_ty);
+    let fn_ty = monomorphize::apply_param_substs(ccx.shared(), instance.substs, &fn_ty);
+
+    let ty::BareFnTy { abi, ref sig, .. } = *common::ty_fn_ty(ccx, fn_ty);
+    let sig = ccx.tcx().erase_late_bound_regions_and_normalize(sig);
+
+    let lldecl = match ccx.instances().borrow().get(&instance) {
+        Some(&val) => val,
+        None => bug!("Instance `{:?}` not already declared", instance)
+    };
+
+    ccx.stats().n_closures.set(ccx.stats().n_closures.get() + 1);
+
+    if !ccx.sess().no_landing_pads() {
+        attributes::emit_uwtable(lldecl, true);
+    }
+
+    let fn_ty = FnType::new(ccx, abi, &sig, &[]);
 
     let (arena, fcx): (TypedArena<_>, FunctionContext);
     arena = TypedArena::new();
     fcx = FunctionContext::new(ccx,
-                               llfndecl,
+                               lldecl,
                                fn_ty,
-                               Some((instance, sig, abi)),
+                               Some((instance, &sig, abi)),
                                &arena);
 
     if fcx.mir.is_none() {
@@ -1038,26 +1045,6 @@ pub fn trans_closure<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
     }
 
     mir::trans_mir(&fcx);
-}
-
-pub fn trans_instance<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>, instance: Instance<'tcx>) {
-    let _s = StatRecorder::new(ccx, ccx.tcx().item_path_str(instance.def));
-    debug!("trans_instance(instance={:?})", instance);
-    let _icx = push_ctxt("trans_instance");
-
-    let fn_ty = ccx.tcx().lookup_item_type(instance.def).ty;
-    let fn_ty = ccx.tcx().erase_regions(&fn_ty);
-    let fn_ty = monomorphize::apply_param_substs(ccx.shared(), instance.substs, &fn_ty);
-
-    let sig = ccx.tcx().erase_late_bound_regions_and_normalize(fn_ty.fn_sig());
-    let abi = fn_ty.fn_abi();
-
-    let lldecl = match ccx.instances().borrow().get(&instance) {
-        Some(&val) => val,
-        None => bug!("Instance `{:?}` not already declared", instance)
-    };
-
-    trans_closure(ccx, lldecl, instance, &sig, abi);
 }
 
 pub fn trans_ctor_shim<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
@@ -1068,7 +1055,7 @@ pub fn trans_ctor_shim<'a, 'tcx>(ccx: &CrateContext<'a, 'tcx>,
     attributes::inline(llfndecl, attributes::InlineAttr::Hint);
     attributes::set_frame_pointer_elimination(ccx, llfndecl);
 
-    let ctor_ty = ccx.tcx().lookup_item_type(def_id).ty;
+    let ctor_ty = ccx.tcx().item_type(def_id);
     let ctor_ty = monomorphize::apply_param_substs(ccx.shared(), substs, &ctor_ty);
 
     let sig = ccx.tcx().erase_late_bound_regions_and_normalize(&ctor_ty.fn_sig());
@@ -1318,7 +1305,7 @@ fn write_metadata(cx: &SharedCrateContext,
 fn internalize_symbols<'a, 'tcx>(sess: &Session,
                                  ccxs: &CrateContextList<'a, 'tcx>,
                                  symbol_map: &SymbolMap<'tcx>,
-                                 reachable: &FnvHashSet<&str>) {
+                                 reachable: &FxHashSet<&str>) {
     let scx = ccxs.shared();
     let tcx = scx.tcx();
 
@@ -1332,7 +1319,7 @@ fn internalize_symbols<'a, 'tcx>(sess: &Session,
     // 'unsafe' because we are holding on to CStr's from the LLVM module within
     // this block.
     unsafe {
-        let mut referenced_somewhere = FnvHashSet();
+        let mut referenced_somewhere = FxHashSet();
 
         // Collect all symbols that need to stay externally visible because they
         // are referenced via a declaration in some other codegen unit.
@@ -1353,7 +1340,7 @@ fn internalize_symbols<'a, 'tcx>(sess: &Session,
 
         // Also collect all symbols for which we cannot adjust linkage, because
         // it is fixed by some directive in the source code (e.g. #[no_mangle]).
-        let linkage_fixed_explicitly: FnvHashSet<_> = scx
+        let linkage_fixed_explicitly: FxHashSet<_> = scx
             .translation_items()
             .borrow()
             .iter()
@@ -1514,7 +1501,7 @@ pub fn filter_reachable_ids(tcx: TyCtxt, reachable: NodeSet) -> NodeSet {
             hir_map::NodeImplItem(&hir::ImplItem {
                 node: hir::ImplItemKind::Method(..), .. }) => {
                 let def_id = tcx.map.local_def_id(id);
-                let generics = tcx.lookup_generics(def_id);
+                let generics = tcx.item_generics(def_id);
                 let attributes = tcx.get_attrs(def_id);
                 (generics.parent_types == 0 && generics.types.is_empty()) &&
                 // Functions marked with #[inline] are only ever translated
@@ -1719,7 +1706,7 @@ pub fn trans_crate<'a, 'tcx>(tcx: TyCtxt<'a, 'tcx, 'tcx>,
             let applicable = match sess.cstore.describe_def(def_id) {
                 Some(Def::Static(..)) => true,
                 Some(Def::Fn(_)) => {
-                    shared_ccx.tcx().lookup_generics(def_id).types.is_empty()
+                    shared_ccx.tcx().item_generics(def_id).types.is_empty()
                 }
                 _ => false
             };
@@ -1862,7 +1849,7 @@ fn collect_and_partition_translation_items<'a, 'tcx>(scx: &SharedCrateContext<'a
     }
 
     if scx.sess().opts.debugging_opts.print_trans_items.is_some() {
-        let mut item_to_cgus = FnvHashMap();
+        let mut item_to_cgus = FxHashMap();
 
         for cgu in &codegen_units {
             for (&trans_item, &linkage) in cgu.items() {

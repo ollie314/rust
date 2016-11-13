@@ -18,7 +18,7 @@ use std::marker::PhantomData;
 use std::mem;
 use syntax::ast;
 use util::common::ErrorReported;
-use util::nodemap::{FnvHashSet, NodeMap};
+use util::nodemap::{FxHashSet, NodeMap};
 
 use super::CodeAmbiguity;
 use super::CodeProjectionError;
@@ -37,7 +37,7 @@ impl<'tcx> ForestObligation for PendingPredicateObligation<'tcx> {
 }
 
 pub struct GlobalFulfilledPredicates<'tcx> {
-    set: FnvHashSet<ty::PolyTraitPredicate<'tcx>>,
+    set: FxHashSet<ty::PolyTraitPredicate<'tcx>>,
     dep_graph: DepGraph,
 }
 
@@ -154,9 +154,13 @@ impl<'a, 'gcx, 'tcx> DeferredObligation<'tcx> {
     pub fn try_select(&self, tcx: TyCtxt<'a, 'gcx, 'tcx>)
                       -> Option<Vec<PredicateObligation<'tcx>>> {
         if let ty::TyAnon(def_id, substs) = self.predicate.skip_binder().self_ty().sty {
+            let ty = if def_id.is_local() {
+                tcx.item_types.borrow().get(&def_id).cloned()
+            } else {
+                Some(tcx.item_type(def_id))
+            };
             // We can resolve the `impl Trait` to its concrete type.
-            if let Some(ty_scheme) = tcx.opt_lookup_item_type(def_id) {
-                let concrete_ty = ty_scheme.ty.subst(tcx, substs);
+            if let Some(concrete_ty) = ty.subst(tcx, substs) {
                 let predicate = ty::TraitRef {
                     def_id: self.predicate.def_id(),
                     substs: tcx.mk_substs_trait(concrete_ty, &[])
@@ -673,7 +677,7 @@ fn register_region_obligation<'tcx>(t_a: Ty<'tcx>,
 impl<'a, 'gcx, 'tcx> GlobalFulfilledPredicates<'gcx> {
     pub fn new(dep_graph: DepGraph) -> GlobalFulfilledPredicates<'gcx> {
         GlobalFulfilledPredicates {
-            set: FnvHashSet(),
+            set: FxHashSet(),
             dep_graph: dep_graph,
         }
     }

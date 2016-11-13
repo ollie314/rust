@@ -33,7 +33,7 @@ use lint::{Level, LevelSource, Lint, LintId, LintPass, LintSource};
 use lint::{EarlyLintPassObject, LateLintPassObject};
 use lint::{Default, CommandLine, Node, Allow, Warn, Deny, Forbid};
 use lint::builtin;
-use util::nodemap::FnvHashMap;
+use util::nodemap::FxHashMap;
 
 use std::cmp;
 use std::default::Default as StdDefault;
@@ -64,18 +64,18 @@ pub struct LintStore {
     late_passes: Option<Vec<LateLintPassObject>>,
 
     /// Lints indexed by name.
-    by_name: FnvHashMap<String, TargetLint>,
+    by_name: FxHashMap<String, TargetLint>,
 
     /// Current levels of each lint, and where they were set.
-    levels: FnvHashMap<LintId, LevelSource>,
+    levels: FxHashMap<LintId, LevelSource>,
 
     /// Map of registered lint groups to what lints they expand to. The bool
     /// is true if the lint group was added by a plugin.
-    lint_groups: FnvHashMap<&'static str, (Vec<LintId>, bool)>,
+    lint_groups: FxHashMap<&'static str, (Vec<LintId>, bool)>,
 
     /// Extra info for future incompatibility lints, descibing the
     /// issue or RFC that caused the incompatibility.
-    future_incompatible: FnvHashMap<LintId, FutureIncompatibleInfo>,
+    future_incompatible: FxHashMap<LintId, FutureIncompatibleInfo>,
 
     /// Maximum level a lint can be
     lint_cap: Option<Level>,
@@ -106,7 +106,7 @@ pub trait IntoEarlyLint {
     fn into_early_lint(self, id: LintId) -> EarlyLint;
 }
 
-impl<'a> IntoEarlyLint for (Span, &'a str) {
+impl<'a, S: Into<MultiSpan>> IntoEarlyLint for (S, &'a str) {
     fn into_early_lint(self, id: LintId) -> EarlyLint {
         let (span, msg) = self;
         let mut diagnostic = Diagnostic::new(errors::Level::Warning, msg);
@@ -171,10 +171,10 @@ impl LintStore {
             lints: vec![],
             early_passes: Some(vec![]),
             late_passes: Some(vec![]),
-            by_name: FnvHashMap(),
-            levels: FnvHashMap(),
-            future_incompatible: FnvHashMap(),
-            lint_groups: FnvHashMap(),
+            by_name: FxHashMap(),
+            levels: FxHashMap(),
+            future_incompatible: FxHashMap(),
+            lint_groups: FxHashMap(),
             lint_cap: None,
         }
     }
@@ -304,8 +304,8 @@ impl LintStore {
                 Err(FindLintError::Removed) => { }
                 Err(_) => {
                     match self.lint_groups.iter().map(|(&x, pair)| (x, pair.0.clone()))
-                                                 .collect::<FnvHashMap<&'static str,
-                                                                       Vec<LintId>>>()
+                                                 .collect::<FxHashMap<&'static str,
+                                                                      Vec<LintId>>>()
                                                  .get(&lint_name[..]) {
                         Some(v) => {
                             v.iter()
@@ -530,7 +530,10 @@ pub trait LintContext: Sized {
         })
     }
 
-    fn lookup_and_emit(&self, lint: &'static Lint, span: Option<Span>, msg: &str) {
+    fn lookup_and_emit<S: Into<MultiSpan>>(&self,
+                                           lint: &'static Lint,
+                                           span: Option<S>,
+                                           msg: &str) {
         let (level, src) = match self.level_src(lint) {
             None => return,
             Some(pair) => pair,
@@ -553,7 +556,7 @@ pub trait LintContext: Sized {
     }
 
     /// Emit a lint at the appropriate level, for a particular span.
-    fn span_lint(&self, lint: &'static Lint, span: Span, msg: &str) {
+    fn span_lint<S: Into<MultiSpan>>(&self, lint: &'static Lint, span: S, msg: &str) {
         self.lookup_and_emit(lint, Some(span), msg);
     }
 
@@ -601,7 +604,7 @@ pub trait LintContext: Sized {
 
     /// Emit a lint at the appropriate level, with no associated span.
     fn lint(&self, lint: &'static Lint, msg: &str) {
-        self.lookup_and_emit(lint, None, msg);
+        self.lookup_and_emit(lint, None as Option<Span>, msg);
     }
 
     /// Merge the lints specified by any lint attributes into the
@@ -838,7 +841,7 @@ impl<'a, 'tcx, 'v> hir_visit::Visitor<'v> for LateContext<'a, 'tcx> {
     }
 
     fn visit_fn(&mut self, fk: hir_visit::FnKind<'v>, decl: &'v hir::FnDecl,
-                body: &'v hir::Block, span: Span, id: ast::NodeId) {
+                body: &'v hir::Expr, span: Span, id: ast::NodeId) {
         run_lints!(self, check_fn, late_passes, fk, decl, body, span, id);
         hir_visit::walk_fn(self, fk, decl, body, span, id);
         run_lints!(self, check_fn_post, late_passes, fk, decl, body, span, id);
@@ -994,10 +997,10 @@ impl<'a> ast_visit::Visitor for EarlyContext<'a> {
     }
 
     fn visit_fn(&mut self, fk: ast_visit::FnKind, decl: &ast::FnDecl,
-                body: &ast::Block, span: Span, id: ast::NodeId) {
-        run_lints!(self, check_fn, early_passes, fk, decl, body, span, id);
-        ast_visit::walk_fn(self, fk, decl, body, span);
-        run_lints!(self, check_fn_post, early_passes, fk, decl, body, span, id);
+                span: Span, id: ast::NodeId) {
+        run_lints!(self, check_fn, early_passes, fk, decl, span, id);
+        ast_visit::walk_fn(self, fk, decl, span);
+        run_lints!(self, check_fn_post, early_passes, fk, decl, span, id);
     }
 
     fn visit_variant_data(&mut self,

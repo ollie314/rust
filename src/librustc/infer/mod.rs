@@ -39,7 +39,7 @@ use std::fmt;
 use syntax::ast;
 use errors::DiagnosticBuilder;
 use syntax_pos::{self, Span, DUMMY_SP};
-use util::nodemap::{FnvHashMap, FnvHashSet, NodeMap};
+use util::nodemap::{FxHashMap, FxHashSet, NodeMap};
 
 use self::combine::CombineFields;
 use self::higher_ranked::HrMatchResult;
@@ -50,6 +50,7 @@ mod bivariate;
 mod combine;
 mod equate;
 pub mod error_reporting;
+mod fudge;
 mod glb;
 mod higher_ranked;
 pub mod lattice;
@@ -134,7 +135,7 @@ pub struct InferCtxt<'a, 'gcx: 'a+'tcx, 'tcx: 'a> {
 
     // the set of predicates on which errors have been reported, to
     // avoid reporting the same error twice.
-    pub reported_trait_errors: RefCell<FnvHashSet<traits::TraitErrorKey<'tcx>>>,
+    pub reported_trait_errors: RefCell<FxHashSet<traits::TraitErrorKey<'tcx>>>,
 
     // Sadly, the behavior of projection varies a bit depending on the
     // stage of compilation. The specifics are given in the
@@ -170,7 +171,7 @@ pub struct InferCtxt<'a, 'gcx: 'a+'tcx, 'tcx: 'a> {
 
 /// A map returned by `skolemize_late_bound_regions()` indicating the skolemized
 /// region that each late-bound region was replaced with.
-pub type SkolemizationMap<'tcx> = FnvHashMap<ty::BoundRegion, &'tcx ty::Region>;
+pub type SkolemizationMap<'tcx> = FxHashMap<ty::BoundRegion, &'tcx ty::Region>;
 
 /// Why did we require that the two types be related?
 ///
@@ -184,7 +185,6 @@ pub enum TypeOrigin {
     MethodCompatCheck(Span),
 
     // Checking that this expression can be assigned where it needs to be
-    // FIXME(eddyb) #11161 is the original Expr required?
     ExprAssignable(Span),
 
     // Relating trait type parameters to those found in impl etc
@@ -492,7 +492,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'gcx> {
             selection_cache: traits::SelectionCache::new(),
             evaluation_cache: traits::EvaluationCache::new(),
             projection_cache: RefCell::new(traits::ProjectionCache::new()),
-            reported_trait_errors: RefCell::new(FnvHashSet()),
+            reported_trait_errors: RefCell::new(FxHashSet()),
             projection_mode: Reveal::NotSpecializable,
             tainted_by_errors_flag: Cell::new(false),
             err_count_on_creation: self.sess.err_count(),
@@ -531,7 +531,7 @@ impl<'a, 'gcx, 'tcx> InferCtxtBuilder<'a, 'gcx, 'tcx> {
             parameter_environment: param_env,
             selection_cache: traits::SelectionCache::new(),
             evaluation_cache: traits::EvaluationCache::new(),
-            reported_trait_errors: RefCell::new(FnvHashSet()),
+            reported_trait_errors: RefCell::new(FxHashSet()),
             projection_mode: projection_mode,
             tainted_by_errors_flag: Cell::new(false),
             err_count_on_creation: tcx.sess.err_count(),
@@ -986,49 +986,6 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
         r
     }
 
-    /// Execute `f` and commit only the region bindings if successful.
-    /// The function f must be very careful not to leak any non-region
-    /// variables that get created.
-    pub fn commit_regions_if_ok<T, E, F>(&self, f: F) -> Result<T, E> where
-        F: FnOnce() -> Result<T, E>
-    {
-        debug!("commit_regions_if_ok()");
-        let CombinedSnapshot { projection_cache_snapshot,
-                               type_snapshot,
-                               int_snapshot,
-                               float_snapshot,
-                               region_vars_snapshot,
-                               obligations_in_snapshot } = self.start_snapshot();
-
-        let r = self.commit_if_ok(|_| f());
-
-        debug!("commit_regions_if_ok: rolling back everything but regions");
-
-        assert!(!self.obligations_in_snapshot.get());
-        self.obligations_in_snapshot.set(obligations_in_snapshot);
-
-        // Roll back any non-region bindings - they should be resolved
-        // inside `f`, with, e.g. `resolve_type_vars_if_possible`.
-        self.projection_cache
-            .borrow_mut()
-            .rollback_to(projection_cache_snapshot);
-        self.type_variables
-            .borrow_mut()
-            .rollback_to(type_snapshot);
-        self.int_unification_table
-            .borrow_mut()
-            .rollback_to(int_snapshot);
-        self.float_unification_table
-            .borrow_mut()
-            .rollback_to(float_snapshot);
-
-        // Commit region vars that may escape through resolved types.
-        self.region_vars
-            .commit(region_vars_snapshot);
-
-        r
-    }
-
     /// Execute `f` then unroll any bindings it creates
     pub fn probe<R, F>(&self, f: F) -> R where
         F: FnOnce(&CombinedSnapshot) -> R,
@@ -1191,10 +1148,6 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
     pub fn next_diverging_ty_var(&self) -> Ty<'tcx> {
         self.tcx.mk_var(self.next_ty_var_id(true))
-    }
-
-    pub fn next_ty_vars(&self, n: usize) -> Vec<Ty<'tcx>> {
-        (0..n).map(|_i| self.next_ty_var()).collect()
     }
 
     pub fn next_int_var_id(&self) -> IntVid {
@@ -1530,7 +1483,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
         span: Span,
         lbrct: LateBoundRegionConversionTime,
         value: &ty::Binder<T>)
-        -> (T, FnvHashMap<ty::BoundRegion, &'tcx ty::Region>)
+        -> (T, FxHashMap<ty::BoundRegion, &'tcx ty::Region>)
         where T : TypeFoldable<'tcx>
     {
         self.tcx.replace_late_bound_regions(
@@ -1700,7 +1653,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
     {
         if let InferTables::Local(tables) = self.tables {
             if let Some(ty) = tables.borrow().closure_tys.get(&def_id) {
-                return ty.subst(self.tcx, substs.func_substs);
+                return ty.subst(self.tcx, substs.substs);
             }
         }
 

@@ -33,7 +33,7 @@ use ty::error::ExpectedFound;
 use ty::fast_reject;
 use ty::fold::TypeFolder;
 use ty::subst::Subst;
-use util::nodemap::{FnvHashMap, FnvHashSet};
+use util::nodemap::{FxHashMap, FxHashSet};
 
 use std::cmp;
 use std::fmt;
@@ -252,7 +252,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
                     let generic_map = def.generics.types.iter().map(|param| {
                         (param.name.as_str().to_string(),
                          trait_ref.substs.type_for_def(param).to_string())
-                    }).collect::<FnvHashMap<String, String>>();
+                    }).collect::<FxHashMap<String, String>>();
                     let parser = Parser::new(&istring);
                     let mut errored = false;
                     let err: String = parser.filter_map(|p| {
@@ -647,7 +647,7 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
             "the trait `{}` cannot be made into an object", trait_str
         ));
 
-        let mut reported_violations = FnvHashSet();
+        let mut reported_violations = FxHashSet();
         for violation in violations {
             if !reported_violations.insert(violation.clone()) {
                 continue;
@@ -663,25 +663,23 @@ impl<'a, 'gcx, 'tcx> TyCtxt<'a, 'gcx, 'tcx> {
                          in the supertrait listing"
                 }
 
-                ObjectSafetyViolation::Method(method,
+                ObjectSafetyViolation::Method(name,
                                               MethodViolationCode::StaticMethod) => {
-                    buf = format!("method `{}` has no receiver",
-                                  method.name);
+                    buf = format!("method `{}` has no receiver", name);
                     &buf
                 }
 
-                ObjectSafetyViolation::Method(method,
+                ObjectSafetyViolation::Method(name,
                                               MethodViolationCode::ReferencesSelf) => {
                     buf = format!("method `{}` references the `Self` type \
                                        in its arguments or return type",
-                                  method.name);
+                                  name);
                     &buf
                 }
 
-                ObjectSafetyViolation::Method(method,
+                ObjectSafetyViolation::Method(name,
                                               MethodViolationCode::Generic) => {
-                    buf = format!("method `{}` has generic type parameters",
-                                  method.name);
+                    buf = format!("method `{}` has generic type parameters", name);
                     &buf
                 }
             };
@@ -786,7 +784,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
     fn predicate_can_apply(&self, pred: ty::PolyTraitRef<'tcx>) -> bool {
         struct ParamToVarFolder<'a, 'gcx: 'a+'tcx, 'tcx: 'a> {
             infcx: &'a InferCtxt<'a, 'gcx, 'tcx>,
-            var_map: FnvHashMap<Ty<'tcx>, Ty<'tcx>>
+            var_map: FxHashMap<Ty<'tcx>, Ty<'tcx>>
         }
 
         impl<'a, 'gcx, 'tcx> TypeFolder<'gcx, 'tcx> for ParamToVarFolder<'a, 'gcx, 'tcx> {
@@ -807,7 +805,7 @@ impl<'a, 'gcx, 'tcx> InferCtxt<'a, 'gcx, 'tcx> {
 
             let cleaned_pred = pred.fold_with(&mut ParamToVarFolder {
                 infcx: self,
-                var_map: FnvHashMap()
+                var_map: FxHashMap()
             });
 
             let cleaned_pred = super::project::normalize(
